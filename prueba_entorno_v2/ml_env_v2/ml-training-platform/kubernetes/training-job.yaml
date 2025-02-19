@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: training-job
+  namespace: ml-namespace
+spec:
+  template:
+    spec:
+      serviceAccountName: prefect-worker
+      restartPolicy: Never  # Solo se ejecuta una vez, no reinicia en caso de fallo
+      containers:
+        - name: prefect-worker
+          image: yagoutad/ml-training-env:latest
+          command:
+            - "prefect"
+            - "worker"
+            - "start"
+            - "--pool"
+            - "ml-training-pool"
+          env:
+            - name: PREFECT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ml-training-secrets
+                  key: PREFECT_API_KEY
+            - name: PREFECT_PROFILE
+              value: "cloud"
+            - name: PREFECT_API_URL
+              value: "https://api.prefect.cloud/api"
+            - name: DAGSHUB_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-training-config
+                  key: DAGSHUB_USERNAME
+            - name: DAGSHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ml-training-secrets
+                  key: DAGSHUB_TOKEN
+            - name: DAGSHUB_REPO_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-training-config
+                  key: DAGSHUB_REPO_NAME
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"

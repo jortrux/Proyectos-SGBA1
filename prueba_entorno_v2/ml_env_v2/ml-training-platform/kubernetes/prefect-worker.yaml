@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prefect-worker
+  namespace: ml-namespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prefect-worker
+  template:
+    metadata:
+      labels:
+        app: prefect-worker
+    spec:
+      serviceAccountName: prefect-worker
+      containers:
+        - name: prefect-worker
+          image: yagoutad/ml-training-env:latest
+          command:
+            - "prefect"
+            - "worker"
+            - "start"
+            - "--pool"
+            - "ml-training-pool"
+          env:
+            - name: PREFECT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ml-training-secrets
+                  key: PREFECT_API_KEY
+            - name: PREFECT_PROFILE
+              value: "cloud"
+            - name: PREFECT_API_URL
+              value: "https://api.prefect.cloud/api"
+            - name: DAGSHUB_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-training-config
+                  key: DAGSHUB_USERNAME
+            - name: DAGSHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ml-training-secrets
+                  key: DAGSHUB_TOKEN
+            - name: DAGSHUB_REPO_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ml-training-config
+                  key: DAGSHUB_REPO_NAME
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"

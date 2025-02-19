@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prefect-worker
+  namespace: ml-namespace
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prefect-worker-role
+  namespace: ml-namespace
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status", "services", "configmaps", "secrets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prefect-worker-rolebinding
+  namespace: ml-namespace
+subjects:
+  - kind: ServiceAccount
+    name: prefect-worker
+    namespace: ml-namespace
+roleRef:
+  kind: Role
+  name: prefect-worker-role
+  apiGroup: rbac.authorization.k8s.io
