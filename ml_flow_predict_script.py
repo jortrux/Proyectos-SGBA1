@@ -1,42 +1,26 @@
-import mlflow
-import mlflow.pyfunc
 import pandas as pd
+import mlflow.pyfunc
 import dagshub
-import os
 
-try:
-    # Inicializar DagsHub
-    dagshub.init(repo_owner='auditoria.SGBA1', repo_name='SGBA1-smartgrids', mlflow=True)
-    print("DagsHub inicializado")
+# Configurar DAGsHub con MLflow antes de cargar el modelo
+dagshub.init(repo_owner='auditoria.SGBA1', repo_name='SGBA1-smartgrids', mlflow=True)
+mlflow.set_tracking_uri("https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow")
 
-    mlflow.set_tracking_uri("https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow")
-    
-    model_uri = "models:/XGBClassifier/1"
+# Definir el nombre del modelo registrado
+model_name = "Prophet-Precio-Luz"
+model_version = 2  # Puedes cambiarlo si hay una nueva versión
 
-    mlflow.pyfunc.get_model_dependencies(model_uri) 
-    model = mlflow.pyfunc.load_model("models:/XGBClassifier/1")
+# URI del modelo en MLflow
+model_uri = f"models:/{model_name}/{model_version}"
 
-    print("Modelo cargado")
+# Cargar el modelo Prophet desde MLflow
+loaded_model = mlflow.pyfunc.load_model(model_uri)
 
-    # Datos de ejemplo para la predicción (ajusta según tus características)
-    input_data = pd.DataFrame({
-        "feature1": [0.5],
-        "feature2": [1.2],
-        "feature3": [0.3],
-        "feature4": [0.8],
-        "feature5": [1.5],
-        "feature6": [0.7],
-        "feature7": [0.2],
-        "feature8": [1.0],
-        "feature9": [0.4],
-        "feature10": [0.9]
-    })
+# Generar fechas para la primera semana de 2025
+future_dates = pd.DataFrame({"ds": pd.date_range(start="2025-01-01", periods=7*24, freq='H')})
 
-    # Realizar la predicción
-    prediction = model.predict(input_data)
-    print("Predicción:", prediction)
+# Hacer predicciones
+predictions = loaded_model.predict(future_dates)
 
-except mlflow.exceptions.MlflowException as e:
-    print("Error al cargar el modelo o realizar la predicción:", e)
-except Exception as e:
-    print("Ocurrió un error:", e)
+# Mostrar los primeros valores predichos
+print(predictions.head())
