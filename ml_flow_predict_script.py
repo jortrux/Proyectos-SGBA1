@@ -23,4 +23,4 @@ future_dates = pd.DataFrame({"ds": pd.date_range(start="2025-01-01", periods=7*2
 predictions = loaded_model.predict(future_dates)
 
 # Mostrar los primeros valores predichos
-print(predictions.head())
+print(predictions)
