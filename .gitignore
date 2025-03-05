@@ -2,3 +2,5 @@
 
 #quitamos el .env
 .env
+
+/Entorno/API/testConexiones.ipynb
