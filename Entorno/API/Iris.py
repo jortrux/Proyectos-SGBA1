@@ -1,8 +1,8 @@
 import mlflow
 import mlflow.sklearn
 
-DAGSHUB_USERNAME = "auditoria.SGBA1"
-DAGSHUB_TOKEN = "ee9be1f2d99f10b3647e4bccee075e65178ecf03"
+DAGSHUB_USERNAME = os.getenv("DAGSHUB_USERNAME")
+DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
 
 mlflow.set_tracking_uri(f"https://{DAGSHUB_USERNAME}:{DAGSHUB_TOKEN}@dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow")
 
