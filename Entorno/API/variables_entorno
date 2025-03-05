@@ -1,3 +1,0 @@
-export MLFLOW_TRACKING_URI="https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow"
-export MLFLOW_TRACKING_USERNAME="auditoria.SGBA1"
-export MLFLOW_TRACKING_PASSWORD="993b92c1e06e9737e8653be41dc9193b518d8fa5"
