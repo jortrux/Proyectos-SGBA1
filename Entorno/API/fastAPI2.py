@@ -6,7 +6,6 @@ import dagshub
 from typing import List
 
 # Configuración de DAGsHub con MLflow
-dagshub.init(repo_owner='auditoria.SGBA1', repo_name='SGBA1-smartgrids', mlflow=True)
 mlflow.set_tracking_uri("https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow")
 
 # Nombre del modelo, esto hay que cambiarlo luego cuando tengamos varios modelos, para que se pueda elegir
