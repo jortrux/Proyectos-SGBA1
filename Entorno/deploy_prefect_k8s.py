@@ -18,6 +18,7 @@ import textwrap
 from base64 import b64encode
 from typing import Optional, Tuple, Dict, Any, List, Union
 import traceback
+import platform
 
 # Configuración de logging
 logging.basicConfig(
@@ -37,6 +38,9 @@ try:
 except ImportError:
     logger.error("No se pudo importar la configuración del proyecto. Verificar la estructura del proyecto.")
     sys.exit(1)
+
+
+IS_WINDOWS = platform.system() == "Windows"
 
 
 class CommandError(Exception):
@@ -96,7 +100,8 @@ def run_command(
         cmd: List[str], 
         env: Optional[Dict[str, str]] = None, 
         check: bool = True, 
-        capture_output: bool = True
+        capture_output: bool = True,
+        shell: bool = False
 ) -> Tuple[int, str, str]:
     """
     Ejecuta un comando externo de forma segura.
@@ -106,6 +111,7 @@ def run_command(
         env: Variables de entorno adicionales.
         check: Si es True, lanza excepción en caso de error.
         capture_output: Si es True, captura y devuelve stdout/stderr.
+        shell: Si es True, ejecuta el comando en el shell del sistema.
     
     Returns:
         Tupla con (código_retorno, stdout, stderr).
@@ -120,12 +126,16 @@ def run_command(
         env_vars.update(env)
     
     try:
+        # En Windows, algunos comandos pueden requerir shell=True para funcionar
+        use_shell = shell or (IS_WINDOWS and cmd[0] in ['minikube', 'docker'])
+
         process = subprocess.run(
             cmd, 
             env=env_vars, 
             text=True,
             capture_output=capture_output,
-            check=False  # Manejamos el error nosotros
+            check=False,  # Manejamos el error nosotros
+            shell=use_shell
         )
         
         stdout = process.stdout if capture_output else ""
@@ -156,8 +166,13 @@ def check_prerequisites() -> None:
     
     missing = []
     for cmd in prereqs:
-        if shutil.which(cmd) is None:
-            missing.append(cmd)
+        # En Windows, buscar también con extensión .exe
+        if IS_WINDOWS:
+            if shutil.which(cmd) is None and shutil.which(f"{cmd}.exe") is None:
+                missing.append(cmd)
+        else:
+            if shutil.which(cmd) is None:
+                missing.append(cmd)
     
     if missing:
         raise RuntimeError(f"No se encontraron los siguientes comandos: {', '.join(missing)}. "
@@ -165,7 +180,8 @@ def check_prerequisites() -> None:
     
     # Verificar que minikube esté en ejecución
     try:
-        _, stdout, _ = run_command(['minikube', 'status'])
+        shell_param = IS_WINDOWS
+        _, stdout, _ = run_command(['minikube', 'status'], shell=shell_param)
         if "Running" not in stdout:
             raise RuntimeError("Minikube no está en ejecución. Inicia minikube con 'minikube start'.")
     except CommandError as e:
@@ -271,12 +287,22 @@ def get_minikube_docker_env() -> Dict[str, str]:
     """
     env = os.environ.copy()
     
-    _, minikube_docker_env, _ = run_command(['minikube', 'docker-env'])
-    
-    for line in minikube_docker_env.splitlines():
-        if line.startswith('export '):
-            key, value = line.replace('export ', '').split('=', 1)
-            env[key] = value.strip('"')
+    if IS_WINDOWS:
+        # Para Windows, usar --shell=none para obtener variables en formato clave=valor
+        _, minikube_docker_env, _ = run_command(['minikube', 'docker-env', '--shell=none'])
+        
+        for line in minikube_docker_env.splitlines():
+            if '=' in line and not line.startswith('#'):
+                key, value = line.split('=', 1)
+                env[key] = value.strip('"')
+    else:
+        # Para sistemas Unix
+        _, minikube_docker_env, _ = run_command(['minikube', 'docker-env'])
+        
+        for line in minikube_docker_env.splitlines():
+            if line.startswith('export '):
+                key, value = line.replace('export ', '').split('=', 1)
+                env[key] = value.strip('"')
     
     return env
 
@@ -306,7 +332,9 @@ def build_docker_image(dockerfile_dir: Path, image_name: str) -> str:
     
     # Construir la imagen
     build_cmd = ['docker', 'build', '-t', full_image_name, str(dockerfile_dir)]
-    run_command(build_cmd, env=env)
+
+    shell_param = IS_WINDOWS
+    run_command(build_cmd, env=env, shell=shell_param)
     
     logger.info(f"Imagen Docker construida exitosamente: {full_image_name}")
     return full_image_name
