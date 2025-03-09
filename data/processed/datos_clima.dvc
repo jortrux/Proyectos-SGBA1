@@ -1,0 +1,6 @@
+outs:
+- md5: 97ebc445c90afea34c4b491e06589c6f.dir
+  size: 3996698
+  nfiles: 12
+  hash: md5
+  path: datos_clima
