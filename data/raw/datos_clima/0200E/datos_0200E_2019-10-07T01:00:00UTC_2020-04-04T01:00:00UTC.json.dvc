@@ -1,0 +1,5 @@
+outs:
+- md5: 1d4c7dd5ad6a9827a403d2e6d01fa6d9
+  size: 85785
+  hash: md5
+  path: datos_0200E_2019-10-07T01:00:00UTC_2020-04-04T01:00:00UTC.json
