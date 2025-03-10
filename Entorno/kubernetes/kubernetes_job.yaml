@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+    name: prefect-flow-8944722c
+    namespace: default
+    labels:
+        app: prefect-flow
+        flow-name: modelo_consumo_individual
+spec:
+    ttlSecondsAfterFinished: 300
+    backoffLimit: 0
+    template:
+        spec:
+            restartPolicy: Never
+            containers:
+              - name: prefect-flow
+                image: prefect-flow:f18249d5
+                imagePullPolicy: Never
+                envFrom:
+                  - configMapRef:
+                        name: flow-configmap
+                  - secretRef:
+                        name: flow-secret

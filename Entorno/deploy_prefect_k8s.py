@@ -162,7 +162,8 @@ def check_prerequisites() -> None:
         RuntimeError: Si falta algún prerrequisito.
     """
     logger.info("Verificando prerrequisitos...")
-    prereqs = ['docker', 'kubectl', 'prefect', 'minikube']
+    # prereqs = ['docker', 'kubectl', 'prefect', 'minikube']
+    prereqs = ['docker', 'kubectl', 'minikube']
     
     missing = []
     for cmd in prereqs:
@@ -563,8 +564,11 @@ def show_pod_logs(pod_name: str, namespace: str) -> None:
     try:
         _, logs, _ = run_command(['kubectl', 'logs', pod_name, '-n', namespace])
         logger.info("=== LOGS DEL POD ===")
-        for line in logs.splitlines():
-            logger.info(line)
+        if logs:
+            for line in logs.splitlines():
+                logger.info(line)
+        else:
+            logger.warning("No se encontraron logs en el pod.")
         logger.info("====================")
     except CommandError as e:
         logger.error(f"Error al obtener logs: {str(e)}")

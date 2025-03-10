@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flow-configmap
+  namespace: default
+data:
+  PREFECT_PROFILE: cloud
+  PREFECT_API_URL: https://api.prefect.cloud/api/accounts/3d19e3e5-583b-40fc-956c-0163ac22a09e/workspaces/eb05056d-c691-4c17-8ed9-260a0cf19aa0
+  DAGSHUB_USERNAME: auditoria.SGBA1
+  DAGSHUB_REPO_NAME: SGBA1-smartgrids
+  DOCKER_DATA_DIR: /opt/prefect/data/
+  REPO_DATA_DIR_PATH: data/
+  REPO_MODELS_DIR_PATH: ./
