@@ -52,6 +52,22 @@ Para rastrear cambios en tus datos, usa `dvc status`:
 dvc status
 ```
 
+## Sincronizar con Git
+Para que el versionado de datos con DVC funcione correctamente, es necesario sincronizar los archivos de seguimiento con Git. Asegúrate de añadir los archivos de control de DVC al repositorio:
+```bash
+git add .dvc config .gitignore path/to/data.dvc
+```
+Luego, confirma y sube los cambios:
+```bash
+git commit -m "Añadidos archivos de control de DVC"
+git push origin main
+```
+Cuando otra persona quiera recuperar los datos, debe clonar el repositorio y luego ejecutar:
+```bash
+git pull
+dvc pull
+```
+
 ## Ejemplo Completo
 1. Inicializa DVC:
     ```bash
@@ -74,8 +90,16 @@ dvc status
     ```bash
     dvc push
     ```
-6. Recupera los datos en otro entorno:
+6. Guarda y sube los archivos de DVC en Git:
     ```bash
+    git add .dvc config .gitignore data/mydataset.dvc
+    git commit -m "Añadidos archivos de DVC"
+    git push origin main
+    ```
+7. Recupera los datos en otro entorno:
+   ```bash
+    git pull
     dvc pull
     ```
+   
 
