@@ -12,7 +12,8 @@ mlflow.set_tracking_uri("https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.ml
 
 # Nombre del modelo, esto hay que cambiarlo luego cuando tengamos varios modelos, para que se pueda elegir
 model_name = "Prophet-Precio-Luz"
-model_version = 2  # Versión, también hay que ajustarlo a distintas versiones de modelos
+model_version = 3  # Versión, también hay que ajustarlo a distintas versiones de modelos
+# Prophet-Consumo-Hogar
 
 # URI del modelo en MLflow
 model_uri = f"models:/{model_name}/{model_version}"
