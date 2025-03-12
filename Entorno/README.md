@@ -57,7 +57,7 @@ Antes de utilizar este entorno, asegúrate de tener instalado:
    pip install -r requirements.txt
    ```
 
-3. Asegúrate de tener configuradas las variables de entorno necesarias en el archivo `config.py` en un archivo `.env` la raíz del proyecto:
+3. Asegúrate de tener configuradas las variables de entorno necesarias en el archivo `config.py` en un archivo `.env` en la raíz del proyecto:
    - `PREFECT_PROFILE`
    - `PREFECT_API_URL`
    - `PREFECT_API_KEY`
