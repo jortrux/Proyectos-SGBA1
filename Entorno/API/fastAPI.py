@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
@@ -5,14 +6,26 @@ import mlflow.pyfunc
 import dagshub
 from typing import List
 
-# Configuración de DAGsHub con MLflow
-dagshub.init(repo_owner='auditoria.SGBA1', repo_name='SGBA1-smartgrids', mlflow=True)
-mlflow.set_tracking_uri("https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow")
+# Configurar credenciales de DAGsHub desde variables de entorno
+DAGSHUB_USERNAME = os.getenv("DAGSHUB_USERNAME", "auditoria.SGBA1")
+DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN", "ee9be1f2d99f10b3647e4bccee075e65178ecf03")
+
+# Configurar autenticación para DAGsHub y MLflow
+os.environ["MLFLOW_TRACKING_URI"] = f"https://dagshub.com/{DAGSHUB_USERNAME}/SGBA1-smartgrids.mlflow"
+os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
+os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
+
+# Iniciar DAGsHub con autenticación
+dagshub.auth.add_app_token(DAGSHUB_TOKEN)
+dagshub.init(repo_owner=DAGSHUB_USERNAME, repo_name="SGBA1-smartgrids", mlflow=True)
+
+# Configurar MLflow con autenticación
+mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
 # Diccionario con los modelos disponibles y sus versiones
 MODELOS_DISPONIBLES = {
     "precio_luz": {"name": "Prophet-Precio-Luz", "version": 3},
-    "consumo_hogar": {"name": "Prophet-Consumo-Hogar", "version": 3}
+    "consumo_hogar": {"name": "Prophet-Consumo-Hogar", "version": 5}
 }
 
 # Cargar modelos en memoria (optimización)
@@ -64,3 +77,5 @@ def predict(data: PredictionInput):
         return {"model": data.model_type, "prediction": predictions.to_dict(orient="records")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error en predicción: {e}")
+
+#docker run -d -p 8000:8000 --env MLFLOW_TRACKING_URI="https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow" --env MLFLOW_TRACKING_USERNAME="auditoria.SGBA1" --env MLFLOW_TRACKING_PASSWORD="ee9be1f2d99f10b3647e4bccee075e65178ecf03" --name mi-api-container mi-fastapi-app

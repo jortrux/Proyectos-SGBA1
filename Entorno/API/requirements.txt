@@ -3,3 +3,8 @@ uvicorn
 mlflow
 pandas
 numpy
+requests
+dagshub
+prophet
+
+
