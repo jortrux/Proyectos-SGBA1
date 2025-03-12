@@ -22,41 +22,26 @@ dagshub.init(repo_owner=DAGSHUB_USERNAME, repo_name="SGBA1-smartgrids", mlflow=T
 # Configurar MLflow con autenticación
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
-# Modelos disponibles en DAGsHub
+# Diccionario con los modelos disponibles y sus versiones
 MODELOS_DISPONIBLES = {
-    "precio_luz": "Prophet-Precio-Luz",
-    "consumo_hogar": "Prophet-Consumo-Hogar"
+    "precio_luz": {"name": "Prophet-Precio-Luz", "version": 3},
+    "consumo_hogar": {"name": "Prophet-Consumo-Hogar", "version": 5}
 }
 
-# Caché de modelos para evitar cargas repetidas
+# Cargar modelos en memoria (optimización)
 model_cache = {}
 
-def obtener_ultima_version_modelo(model_name: str) -> int:
-    """Obtiene la última versión registrada del modelo en DAGsHub."""
-    try:
-        client = mlflow.MlflowClient()
-        versions = client.get_latest_versions(model_name)
-        if versions:
-            return max(int(v.version) for v in versions)  # Obtiene la versión más alta
-        else:
-            raise ValueError(f"No hay versiones disponibles para el modelo {model_name}")
-    except Exception as e:
-        raise RuntimeError(f"Error obteniendo la última versión del modelo '{model_name}': {e}")
-
 def cargar_modelo(model_key: str):
-    """Carga el modelo más reciente desde MLflow en DAGsHub."""
+    """Carga el modelo desde MLflow si no está en caché."""
     if model_key not in MODELOS_DISPONIBLES:
         raise ValueError(f"Modelo no reconocido: {model_key}")
 
-    model_name = MODELOS_DISPONIBLES[model_key]
-    
-    # Obtener la última versión registrada en DAGsHub
-    model_version = obtener_ultima_version_modelo(model_name)
+    model_name = MODELOS_DISPONIBLES[model_key]["name"]
+    model_version = MODELOS_DISPONIBLES[model_key]["version"]
     model_uri = f"models:/{model_name}/{model_version}"
 
     try:
         if model_key not in model_cache:
-            print(f"Cargando modelo '{model_name}' versión {model_version} desde MLflow...")
             model_cache[model_key] = mlflow.pyfunc.load_model(model_uri)
         return model_cache[model_key]
     except Exception as e:
@@ -92,3 +77,5 @@ def predict(data: PredictionInput):
         return {"model": data.model_type, "prediction": predictions.to_dict(orient="records")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error en predicción: {e}")
+
+#docker run -d -p 8000:8000 --env MLFLOW_TRACKING_URI="https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow" --env MLFLOW_TRACKING_USERNAME="auditoria.SGBA1" --env MLFLOW_TRACKING_PASSWORD="ee9be1f2d99f10b3647e4bccee075e65178ecf03" --name mi-api-container mi-fastapi-app
