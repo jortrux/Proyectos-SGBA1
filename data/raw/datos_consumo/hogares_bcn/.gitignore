@@ -1,0 +1,4 @@
+*.csv
+
+consumo_electrico_timestamp_corregido.csv
+consumo_ts_parte_0.csv

@@ -1,0 +1,19 @@
+# Crear un nuevo entorno virtual llamado "temp_env"
+python3 -m venv "temp_env"
+
+# Activar el entorno virtual
+source temp_env/bin/activate
+
+# Instalar DVC y el plugin DVC S3
+pip install dvc dvc-s3
+
+# Clonar el repositorio Git especificado
+git clone https://github.com/jortrux/Proyectos-SGBA1.git
+
+# Modificar la configuración remota de DVC con la clave de acceso y la clave secreta proporcionadas
+# se creará un archivo .dvc/config.local en el directorio .dvc
+dvc remote modify origin --local access_key_id XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+dvc remote modify origin --local secret_access_key XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+# Descargar los datos del almacenamiento remoto de DVC
+dvc pull

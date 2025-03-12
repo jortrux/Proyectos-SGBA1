@@ -4,16 +4,26 @@
 
 ```
 root/
+├── .dvc
 ├── data/                   # Almacén de datos
 │   ├── data_cleaning/      # Código para procesar los datos
+│   │   ├── datos_clima
+│   │   ├── datos_consumo
+│   │   └── datos_precio
 │   ├── processed/          # Datos procesados/listos para el modelo
-│   │   ├── agente/
-│   │   ├── predictivo_hogar/
-│   │   └── predictivo_precio/
+│   │   ├── datos_clima
+│   │   ├── datos_consumo
+│   │   └── datos_precio
 │   └── raw/                # Datos sin procesar (originales)
-│       ├── agente/
-│       ├── predictivo_hogar/
-│       └── predictivo_precio/
+│       ├── datos_clima
+│       │   ├── "idema1"
+│       │   ├── "idema2"
+│       │   └── "idema3"
+│       ├── datos_consumo
+│       └── datos_precio
+├── guias
+│   ├── entorno               
+│   └── dvc
 ├── entorno/                # Configuración de entorno, manuales de instalación, modelos entrenados y checkpoints
 ├── src/                    # Código fuente del proyecto
 │   ├── data/               # Scripts para cargar y procesar datos
@@ -29,10 +39,10 @@ root/
 │           ├── notebooks/
 │           └── scripts/
 ├── pruebas/                # Espacio de experimentación y pruebas
-│   ├── ml_env_2/
-│   ├── Modelos/
-│   ├── Prefect/
-│   └── Prototipos/
+│   ├── Modelos
+│   ├── Prefect
+│   ├── Prototipos
+│   └── ml_env_v2
 ├── requirements.txt        # Dependencias del proyecto
 └── README.md               # Descripción general de la estructura del proyecto
 ```

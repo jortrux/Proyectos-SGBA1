@@ -1,0 +1,6 @@
+outs:
+- md5: 52427b64b5eaaa52dad43164f970631b.dir
+  size: 50211320
+  nfiles: 1075
+  hash: md5
+  path: generacion_consumo_Scrapeado_peninsula
