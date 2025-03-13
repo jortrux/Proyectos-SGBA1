@@ -1,332 +1,716 @@
-from prefect import flow, task
-from prefect.logging import get_run_logger
-import tempfile
-from kubernetes import client, config
-from kubernetes.client.exceptions import ApiException
-import subprocess
-from pathlib import Path
-from typing import Optional, Tuple
-import shutil
-from base64 import b64encode
-import time
-from pathlib import Path
+"""
+prefect_k8s_launcher.py
+
+Script automatizador para ejecutar flujos de Prefect en Kubernetes/Minikube.
+Uso: python prefect_k8s_launcher.py ruta/al/flujo.py
+"""
+
+import argparse
 import sys
 import os
+import logging
+import shutil
+import subprocess
+import time
+import uuid
+from pathlib import Path
+import textwrap
+from base64 import b64encode
+from typing import Optional, Tuple, Dict, Any, List, Union
+import traceback
+import platform
+
+# Configuración de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('prefect_k8s_launcher.log')
+    ]
+)
+logger = logging.getLogger("prefect_k8s_launcher")
 
 # Añadir la raíz del proyecto a sys.path
 try:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
     from config import *
 except ImportError:
-    print("No se pudo importar la configuración del proyecto. Verificar la estructura del proyecto.")
+    logger.error("No se pudo importar la configuración del proyecto. Verificar la estructura del proyecto.")
     sys.exit(1)
 
-def run_command(command: str) -> str:
-    """Ejecuta un comando en la terminal y maneja errores"""
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Error ejecutando '{command}': {e.stderr}")
-    
-def check_pod_exists(core_v1, namespace: str, job_name: str) -> Optional[str]:
-    """
-    Verifica si existe el pod y retorna su nombre
-    """
 
-    pods = core_v1.list_namespaced_pod(
-        namespace=namespace,
-        label_selector=f"job-name={job_name}"
+IS_WINDOWS = platform.system() == "Windows"
+
+
+class CommandError(Exception):
+    """Excepción personalizada para errores de comandos externos."""
+    def __init__(self, cmd: List[str], return_code: int, stdout: str, stderr: str):
+        self.cmd = cmd
+        self.return_code = return_code
+        self.stdout = stdout
+        self.stderr = stderr
+        message = f"Comando '{' '.join(cmd)}' falló con código {return_code}.\nStdout: {stdout}\nStderr: {stderr}"
+        super().__init__(message)
+
+
+def parse_arguments() -> argparse.Namespace:
+    """
+    Analiza los argumentos de línea de comandos.
+    
+    Returns:
+        argparse.Namespace: Objeto con los argumentos parseados.
+    
+    Raises:
+        SystemExit: Si hay errores en los argumentos.
+    """
+    parser = argparse.ArgumentParser(description='Ejecutar un flujo de Prefect en Kubernetes/Minikube')
+    
+    # Usar dest para evitar problemas con el guion
+    parser.add_argument('flow_script', metavar='flow-script', type=Path, 
+                      help='Ruta al script Python que contiene el flujo de Prefect')
+    
+    project_root = Path(__file__).resolve().parent.parent
+    parser.add_argument('--requirements', type=Path, default=project_root / 'requirements.txt',
+                      help=f'Ruta al archivo requirements.txt (por defecto: PROJECT_ROOT/requirements.txt)')
+    parser.add_argument('--data', type=Path, default=project_root / 'data',
+                      help=f'Ruta al directorio de datos (por defecto: PROJECT_ROOT/data)')
+    parser.add_argument('--timeout', type=int, default=3600, 
+                      help='Tiempo máximo de espera para la ejecución (segundos)')
+    parser.add_argument('--image-name', type=str, default='prefect-flow', 
+                      help='Nombre base para la imagen Docker')
+    parser.add_argument('--base-image', type=str, default='yagoutad/sgba1-base-image:latest', 
+                      help='Nombre de la imagen base que usará la imagen del contenedor del pod')
+    parser.add_argument('--namespace', type=str, default='default', 
+                      help='Namespace de Kubernetes')
+    parser.add_argument('--debug', action='store_true', 
+                      help='Activar modo de depuración con logs detallados')
+    
+    args = parser.parse_args()
+    
+    # Configurar nivel de logging basado en --debug
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Modo de depuración activado")
+    
+    return args
+
+
+def run_command(
+        cmd: List[str], 
+        env: Optional[Dict[str, str]] = None, 
+        check: bool = True, 
+        capture_output: bool = True,
+        shell: bool = False
+) -> Tuple[int, str, str]:
+    """
+    Ejecuta un comando externo de forma segura.
+    
+    Args:
+        cmd: Lista con el comando y sus argumentos.
+        env: Variables de entorno adicionales.
+        check: Si es True, lanza excepción en caso de error.
+        capture_output: Si es True, captura y devuelve stdout/stderr.
+        shell: Si es True, ejecuta el comando en el shell del sistema.
+    
+    Returns:
+        Tupla con (código_retorno, stdout, stderr).
+    
+    Raises:
+        CommandError: Si check=True y el comando falla.
+    """
+    logger.debug(f"Ejecutando comando: {' '.join(cmd)}")
+    
+    env_vars = os.environ.copy()
+    if env:
+        env_vars.update(env)
+    
+    try:
+        # En Windows, algunos comandos pueden requerir shell=True para funcionar
+        use_shell = shell or (IS_WINDOWS and cmd[0] in ['minikube', 'docker'])
+
+        process = subprocess.run(
+            cmd, 
+            env=env_vars, 
+            text=True,
+            capture_output=capture_output,
+            check=False,  # Manejamos el error nosotros
+            shell=use_shell
+        )
+        
+        stdout = process.stdout if capture_output else ""
+        stderr = process.stderr if capture_output else ""
+        
+        if process.returncode != 0 and check:
+            raise CommandError(cmd, process.returncode, stdout, stderr)
+        
+        return process.returncode, stdout, stderr
+    
+    except FileNotFoundError:
+        error_msg = f"Comando no encontrado: {cmd[0]}"
+        logger.error(error_msg)
+        if check:
+            raise CommandError(cmd, 127, "", error_msg)
+        return 127, "", error_msg
+
+
+def check_prerequisites() -> None:
+    """
+    Verifica que estén instalados los prerrequisitos necesarios.
+    
+    Raises:
+        RuntimeError: Si falta algún prerrequisito.
+    """
+    logger.info("Verificando prerrequisitos...")
+    # prereqs = ['docker', 'kubectl', 'prefect', 'minikube']
+    prereqs = ['docker', 'kubectl', 'minikube']
+    
+    missing = []
+    for cmd in prereqs:
+        # En Windows, buscar también con extensión .exe
+        if IS_WINDOWS:
+            if shutil.which(cmd) is None and shutil.which(f"{cmd}.exe") is None:
+                missing.append(cmd)
+        else:
+            if shutil.which(cmd) is None:
+                missing.append(cmd)
+    
+    if missing:
+        raise RuntimeError(f"No se encontraron los siguientes comandos: {', '.join(missing)}. "
+                          f"Asegúrate de tenerlos instalados.")
+    
+    # Verificar que minikube esté en ejecución
+    try:
+        shell_param = IS_WINDOWS
+        _, stdout, _ = run_command(['minikube', 'status'], shell=shell_param)
+        if "Running" not in stdout:
+            raise RuntimeError("Minikube no está en ejecución. Inicia minikube con 'minikube start'.")
+    except CommandError as e:
+        raise RuntimeError(f"Error al verificar minikube: {str(e)}")
+    
+    logger.info("Todos los prerrequisitos verificados correctamente.")
+
+
+def setup_dockerfile_dir(
+    flow_script_path: Path, 
+    requirements_path: Path, 
+    data_path: Path, 
+    base_image_name: str, 
+    dockerfile_dir: Path
+) -> str:
+    """
+    Crea o actualiza un Dockerfile, copiando en el proceso los archivos necesarios.
+    
+    Args:
+        flow_script_path: Ruta al script de flujo.
+        requirements_path: Ruta al archivo de requisitos.
+        data_path: Ruta al directorio de datos.
+        base_image_name: Nombre de la imagen base.
+        dockerfile_dir: Directorio donde crear el Dockerfile.
+    
+    Returns:
+        str: Nombre del flujo (nombre del archivo sin extensión).
+    
+    Raises:
+        FileNotFoundError: Si algún archivo requerido no existe.
+    """
+    logger.info(f"Creando entorno en: {dockerfile_dir}")
+    
+    # Crear directorio si no existe
+    dockerfile_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Verificar y copiar el archivo de requirements
+    if not requirements_path.exists():
+        raise FileNotFoundError(f"El archivo de requirements {requirements_path} no existe")
+    
+    requirements_dest = dockerfile_dir / 'requirements.txt'
+    shutil.copy2(requirements_path, requirements_dest)
+    logger.debug(f"Copiado: {requirements_path} -> {requirements_dest}")
+    
+    # Verificar y copiar el directorio de datos
+    if not data_path.exists():
+        raise FileNotFoundError(f"El directorio de datos {data_path} no existe")
+    
+    data_dest = dockerfile_dir / 'data'
+    if data_dest.exists():
+        shutil.rmtree(data_dest)
+    shutil.copytree(data_path, data_dest)
+    logger.debug(f"Copiado directorio: {data_path} -> {data_dest}")
+    
+    # Verificar y copiar el script de flujo
+    if not flow_script_path.exists():
+        raise FileNotFoundError(f"El script de flujo {flow_script_path} no existe")
+    
+    flow_dest = dockerfile_dir / 'flow_script.py'
+    shutil.copy2(flow_script_path, flow_dest)
+    logger.debug(f"Copiado: {flow_script_path} -> {flow_dest}")
+    
+    # Crear Dockerfile
+    dockerfile_content = textwrap.dedent(
+        f"""\
+        FROM {base_image_name}
+
+        WORKDIR /opt/prefect
+
+        # Copiar el archivo de dependencias
+        COPY requirements.txt .
+
+        # Instalar Prefect y dependencias
+        RUN pip install --no-cache-dir -r requirements.txt
+
+        # Copiar los datos
+        COPY data/ {DOCKER_DATA_DIR}
+
+        # Copiar el script del flujo
+        COPY flow_script.py .
+
+        # Ejecutar el flujo cuando se inicie el contenedor
+        CMD ["python", "flow_script.py"]
+        """
     )
     
-    if pods.items:
-        return pods.items[0].metadata.name
-    return None
-
-@task
-def validate_environment() -> bool:
-    """Verifica que las herramientas necesarias estén instaladas"""
-    logger = get_run_logger()
-    required_commands = ['docker', 'kubectl', 'minikube']
-    for cmd in required_commands:
-        if not shutil.which(cmd):
-            raise RuntimeError(f"No se encontró {cmd}. Por favor, instálalo.")
+    with open(dockerfile_dir / "Dockerfile", "w") as f:
+        f.write(dockerfile_content)
     
-    run_command("minikube status")
-    logger.info("✅ Ambiente validado correctamente")
-    return True
+    logger.debug(f"Dockerfile creado en {dockerfile_dir / 'Dockerfile'}")
+    return flow_script_path.stem
 
-@task
-def create_Dockerfile(script_path: Path, requirements_path: Path = PROJECT_ROOT / "requirements.txt", data_dir_path: Path = PROJECT_ROOT / "data") -> Tuple[Path, Path]:
-    """Prepara el Dockerfile para crear la imagen de Docker"""
-    logger = get_run_logger()
-    temp_dir = Path(tempfile.mkdtemp())
-    dockerfile_path = temp_dir / "Dockerfile"
+
+def get_minikube_docker_env() -> Dict[str, str]:
+    """
+    Obtiene las variables de entorno para usar el Docker daemon de minikube.
     
-    dockerfile_content = [
-        "FROM prefecthq/prefect:3-python3.12",
-        "WORKDIR /opt/prefect",
-    ]
+    Returns:
+        Dict[str, str]: Variables de entorno para Docker.
     
-    if requirements_path and requirements_path.exists():
-        shutil.copy2(requirements_path, temp_dir / "requirements.txt")
-        dockerfile_content.extend(["COPY requirements.txt .", "RUN pip install -r requirements.txt"])
+    Raises:
+        CommandError: Si hay un error al obtener las variables.
+    """
+    env = os.environ.copy()
     
-    if data_dir_path:
-        shutil.copytree(data_dir_path, temp_dir / "data", dirs_exist_ok=True)
-        dockerfile_content.extend(["COPY data ./data"])
-
-    dockerfile_content.extend(["COPY flow.py ."])
-    
-    dockerfile_content.extend(['CMD ["python", "flow.py"]'])
-
-    dockerfile_path.write_text("\n".join(dockerfile_content))
-    shutil.copy2(script_path, temp_dir / "flow.py")
-
-    logger.info("✅ Dockerfile preparado")
-    return temp_dir, dockerfile_path
-
-@task
-def create_kubernetes_secret(namespace: str = "default") -> str:
-    """Crea o actualiza un Secret en Kubernetes"""
-    logger = get_run_logger()
-    secret_name = "flow-secret"
-
-    try:
-        # Cargar configuración del cluster
-        config.load_kube_config()
+    if IS_WINDOWS:
+        # Para Windows, usar --shell=none para obtener variables en formato clave=valor
+        _, minikube_docker_env, _ = run_command(['minikube', 'docker-env', '--shell=none'])
         
-        # Crear cliente de la API
-        v1 = client.CoreV1Api()
+        for line in minikube_docker_env.splitlines():
+            if '=' in line and not line.startswith('#'):
+                key, value = line.split('=', 1)
+                env[key] = value.strip('"')
+    else:
+        # Para sistemas Unix
+        _, minikube_docker_env, _ = run_command(['minikube', 'docker-env'])
+        
+        for line in minikube_docker_env.splitlines():
+            if line.startswith('export '):
+                key, value = line.replace('export ', '').split('=', 1)
+                env[key] = value.strip('"')
+    
+    return env
 
-        # Crear objeto Secret
-        secret = client.V1Secret(
-            api_version="v1",
-            kind="Secret",
-            metadata=client.V1ObjectMeta(
-                name=secret_name,
-                namespace=namespace
-            ),
-            type="Opaque",
-            data={
-                "PREFECT_API_KEY": b64encode(PREFECT_API_KEY.encode()).decode(),
-                "DAGSHUB_TOKEN": b64encode(DAGSHUB_TOKEN.encode()).decode()
-            }
-        )
 
-        try:
-            # Intentar crear el Secret
-            v1.create_namespaced_secret(namespace=namespace, body=secret)
-            logger.info("✅ Secret creado en Kubernetes")
-        except ApiException as e:
-            if e.status == 409:  # Código 409 indica que el recurso ya existe
-                v1.replace_namespaced_secret(name=secret_name, namespace=namespace, body=secret)
-                logger.info("🔄 Secret existente actualizado en Kubernetes")
-            else:
-                raise
+def build_docker_image(dockerfile_dir: Path, image_name: str) -> str:
+    """
+    Construye la imagen Docker con el flujo de Prefect.
     
-    except Exception as e:
-        logger.error(f"❌ Error al crear/actualizar el Secret: {str(e)}")
-        raise RuntimeError(f"Error al crear/actualizar el Secret: {str(e)}")
+    Args:
+        dockerfile_dir: Directorio que contiene el Dockerfile.
+        image_name: Nombre base para la imagen.
     
-    return secret_name
+    Returns:
+        str: Nombre completo de la imagen construida (con tag).
     
-@task
-def create_kubernetes_configmap(namespace: str = "default") -> str:
-    """Crea o actualiza un ConfigMap en Kubernetes"""
-    logger = get_run_logger()
+    Raises:
+        CommandError: Si hay un error al construir la imagen.
+    """
+    # Generar un tag único para la imagen
+    image_tag = f"{image_name}:{str(uuid.uuid4())[:8]}"
+    full_image_name = image_tag
+    
+    logger.info(f"Construyendo imagen Docker: {full_image_name}")
+    
+    # Usar el Docker daemon de minikube
+    env = get_minikube_docker_env()
+    
+    # Construir la imagen
+    build_cmd = ['docker', 'build', '-t', full_image_name, str(dockerfile_dir)]
+
+    shell_param = IS_WINDOWS
+    run_command(build_cmd, env=env, shell=shell_param)
+    
+    logger.info(f"Imagen Docker construida exitosamente: {full_image_name}")
+    return full_image_name
+
+
+def apply_kubernetes_resource(resource_path: Path, resource_type: str) -> None:
+    """
+    Aplica un recurso de Kubernetes usando kubectl.
+    
+    Args:
+        resource_path: Ruta al archivo YAML del recurso.
+        resource_type: Tipo de recurso (ej: "ConfigMap", "Secret", "Job").
+    
+    Raises:
+        CommandError: Si hay un error al aplicar el recurso.
+    """
+    logger.info(f"Aplicando {resource_type} desde {resource_path}")
+    run_command(['kubectl', 'apply', '-f', str(resource_path)])
+    logger.info(f"{resource_type} aplicado exitosamente")
+
+
+def apply_configmap(kubernetes_dir: Path, namespace: str = "default") -> str:
+    """
+    Crea y aplica el configmap en Kubernetes.
+    
+    Args:
+        kubernetes_dir: Directorio para guardar el archivo YAML.
+        namespace: Namespace de Kubernetes.
+    
+    Returns:
+        str: Nombre del configmap creado.
+    
+    Raises:
+        CommandError: Si hay un error al aplicar el configmap.
+    """
+    logger.info("Creando ConfigMap para Kubernetes...")
+    
+    # Asegurar que el directorio existe
+    kubernetes_dir.mkdir(parents=True, exist_ok=True)
+    
     configmap_name = "flow-configmap"
-
-    try:
-        # Cargar configuración del cluster
-        config.load_kube_config()
-        
-        # Crear cliente de la API
-        v1 = client.CoreV1Api()
-
-        # Crear objeto ConfigMap
-        configmap = client.V1ConfigMap(
-            api_version="v1",
-            kind="ConfigMap",
-            metadata=client.V1ObjectMeta(
-                name=configmap_name,
-                namespace=namespace,
-            ),
-            data={
-                "PREFECT_PROFILE": PREFECT_PROFILE,
-                "PREFECT_API_URL": PREFECT_API_URL,
-                "DAGSHUB_USERNAME": DAGSHUB_USERNAME,
-                "DAGSHUB_REPO_NAME": DAGSHUB_REPO_NAME,
-                "REPO_DATA_DIR_PATH": REPO_DATA_DIR_PATH,
-                "REPO_MODELS_DIR_PATH": REPO_MODELS_DIR_PATH
-            }
-        )
-
-        try:
-            # Intentar crear el ConfigMap
-            v1.create_namespaced_config_map(namespace=namespace, body=configmap)
-            logger.info("✅ ConfigMap creado en Kubernetes")
-        except ApiException as e:
-            if e.status == 409:  # Código 409 indica que el recurso ya existe
-                v1.replace_namespaced_config_map(name=configmap_name, namespace=namespace, body=configmap)
-                logger.info("🔄 ConfigMap existente actualizado en Kubernetes")
-            else:
-                raise
     
-    except Exception as e:
-        logger.error(f"❌ Error al crear/actualizar el ConfigMap: {str(e)}")
-        raise RuntimeError(f"Error al crear/actualizar el ConfigMap: {str(e)}")
+    # Variables de entorno para el ConfigMap
+    env_vars = {
+        "PREFECT_PROFILE": PREFECT_PROFILE,
+        "PREFECT_API_URL": PREFECT_API_URL,
+        "DAGSHUB_USERNAME": DAGSHUB_USERNAME,
+        "DAGSHUB_REPO_NAME": DAGSHUB_REPO_NAME,
+        "DOCKER_DATA_DIR": DOCKER_DATA_DIR,
+        "REPO_DATA_DIR_PATH": REPO_DATA_DIR_PATH,
+        "REPO_MODELS_DIR_PATH": REPO_MODELS_DIR_PATH,
+    }
+    
+    # Crear el YAML para el configmap
+    configmap_content = "apiVersion: v1\nkind: ConfigMap\n"
+    configmap_content += f"metadata:\n  name: {configmap_name}\n  namespace: {namespace}\n"
+    configmap_content += "data:\n"
+    
+    for key, value in env_vars.items():
+        configmap_content += f"  {key}: {value}\n"
+    
+    # Escribir el YAML
+    yaml_path = kubernetes_dir / "kubernetes_configmap.yaml"
+    with open(yaml_path, "w") as f:
+        f.write(configmap_content)
+    
+    # Aplicar el configmap
+    apply_kubernetes_resource(yaml_path, "ConfigMap")
     
     return configmap_name
 
-@task
-def build_docker_image(dockerfile_dir: Path, dockerfile_Path: Path) -> str:
-    """Construye la imagen Docker"""
-    logger = get_run_logger()
-    image_name = "yagoutad/prefect-flow:latest"
-    run_command(f"docker build -f {dockerfile_Path} -t {image_name} {dockerfile_dir}")
-    run_command(f"docker push {image_name}")
-    logger.info("✅ Imagen Docker construida y subida")
-    return image_name
 
-@task
-def create_kubernetes_job(image_name: str, configmap_name: str, secret_name: str, namespace: str = "default") -> str:
-    """Crea o actualiza un Job en Kubernetes"""
-    logger = get_run_logger()
-    job_name = "flow-job"
+def apply_secret(kubernetes_dir: Path, namespace: str = "default") -> str:
+    """
+    Crea y aplica el Secret en Kubernetes.
+    
+    Args:
+        kubernetes_dir: Directorio para guardar el archivo YAML.
+        namespace: Namespace de Kubernetes.
+    
+    Returns:
+        str: Nombre del secret creado.
+    
+    Raises:
+        CommandError: Si hay un error al aplicar el secret.
+    """
+    logger.info("Creando Secret para Kubernetes...")
+    
+    # Asegurar que el directorio existe
+    kubernetes_dir.mkdir(parents=True, exist_ok=True)
+    
+    secret_name = "flow-secret"
+    
+    # Variables para el Secret (codificadas en base64)
+    secret_vars = {
+        "PREFECT_API_KEY": b64encode(PREFECT_API_KEY.encode()).decode(),
+        "DAGSHUB_TOKEN": b64encode(DAGSHUB_TOKEN.encode()).decode(),
+    }
+    
+    # Crear el YAML para el secret
+    secret_content = "apiVersion: v1\nkind: Secret\n"
+    secret_content += f"metadata:\n  name: {secret_name}\n  namespace: {namespace}\n"
+    secret_content += "type: Opaque\ndata:\n"
+    
+    for key, value in secret_vars.items():
+        secret_content += f"  {key}: {value}\n"
+    
+    # Escribir el YAML
+    yaml_path = kubernetes_dir / "kubernetes_secret.yaml"
+    with open(yaml_path, "w") as f:
+        f.write(secret_content)
+    
+    # Aplicar el secret
+    apply_kubernetes_resource(yaml_path, "Secret")
+    
+    return secret_name
 
+
+def deploy_to_kubernetes(flow_name: str, image_name: str, 
+                        configmap_name: str, secret_name: str, 
+                        kubernetes_dir: Path, namespace: str,
+                        timeout: int) -> None:
+    """
+    Despliega el flujo en Kubernetes y crea el job.
+    
+    Args:
+        flow_name: Nombre del flujo.
+        image_name: Nombre de la imagen Docker.
+        configmap_name: Nombre del ConfigMap.
+        secret_name: Nombre del Secret.
+        kubernetes_dir: Directorio para guardar el archivo YAML.
+        namespace: Namespace de Kubernetes.
+        timeout: Tiempo máximo de espera (segundos).
+    
+    Raises:
+        RuntimeError: Si el job falla o excede el timeout.
+        CommandError: Si hay un error al crear o monitorear el job.
+    """
+    logger.info(f"Desplegando flujo '{flow_name}' en Kubernetes...")
+    
+    # Asegurar que el directorio existe
+    kubernetes_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Crear un nombre único para el job
+    job_name = f"prefect-flow-{str(uuid.uuid4())[:8]}"
+    
+    # Crear el YAML para el job
+    job_yaml = textwrap.dedent(
+        f"""\
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+            name: {job_name}
+            namespace: {namespace}
+            labels:
+                app: prefect-flow
+                flow-name: {flow_name}
+        spec:
+            ttlSecondsAfterFinished: 300
+            backoffLimit: 0
+            template:
+                spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: prefect-flow
+                        image: {image_name}
+                        imagePullPolicy: Never
+                        envFrom:
+                          - configMapRef:
+                                name: {configmap_name}
+                          - secretRef:
+                                name: {secret_name}
+        """
+    )
+    
+    # Escribir el YAML
+    yaml_path = kubernetes_dir / "kubernetes_job.yaml"
+    with open(yaml_path, "w") as f:
+        f.write(job_yaml)
+    
+    # Aplicar el job
+    apply_kubernetes_resource(yaml_path, "Job")
+    
+    logger.info(f"Monitoreando el estado del job '{job_name}' (timeout: {timeout}s)...")
+    monitor_kubernetes_job(job_name, namespace, timeout)
+
+
+def get_pod_name(job_name: str, namespace: str) -> Optional[str]:
+    """
+    Obtiene el nombre del pod asociado a un job.
+    
+    Args:
+        job_name: Nombre del job.
+        namespace: Namespace de Kubernetes.
+    
+    Returns:
+        Optional[str]: Nombre del pod o None si no se encuentra.
+    """
     try:
-        # Cargar configuración del cluster
-        config.load_kube_config()
-        
-        # Crear cliente de la API
-        v1 = client.BatchV1Api()
+        cmd = [
+            'kubectl', 'get', 'pods', 
+            '-n', namespace, 
+            '-l', f'job-name={job_name}', 
+            '-o', 'jsonpath={.items[0].metadata.name}'
+        ]
+        _, stdout, _ = run_command(cmd)
+        pod_name = stdout.strip()
+        return pod_name if pod_name else None
+    except CommandError:
+        return None
 
-        # Eliminar el Job si ya existe
+
+def show_pod_logs(pod_name: str, namespace: str) -> None:
+    """
+    Muestra los logs de un pod.
+    
+    Args:
+        pod_name: Nombre del pod.
+        namespace: Namespace de Kubernetes.
+    """
+    if not pod_name:
+        logger.warning("No se encontró el pod para mostrar los logs.")
+        return
+    
+    logger.info(f"Mostrando logs del pod {pod_name}...")
+    try:
+        _, logs, _ = run_command(['kubectl', 'logs', pod_name, '-n', namespace])
+        logger.info("=== LOGS DEL POD ===")
+        if logs:
+            for line in logs.splitlines():
+                logger.info(line)
+        else:
+            logger.warning("No se encontraron logs en el pod.")
+        logger.info("====================")
+    except CommandError as e:
+        logger.error(f"Error al obtener logs: {str(e)}")
+
+
+def monitor_kubernetes_job(job_name: str, namespace: str, timeout: int) -> None:
+    """
+    Monitorea el estado de un job de Kubernetes hasta que complete o falle.
+    
+    Args:
+        job_name: Nombre del job.
+        namespace: Namespace de Kubernetes.
+        timeout: Tiempo máximo de espera (segundos).
+    
+    Raises:
+        RuntimeError: Si el job falla o excede el timeout.
+    """
+    start_time = time.time()
+    check_interval = 10  # segundos entre verificaciones
+    
+    while time.time() - start_time < timeout:
+        # Verificar estado del job (completado)
         try:
-            v1.delete_namespaced_job(name=job_name, namespace=namespace, propagation_policy="Foreground")
-        except ApiException as e:
-            if e.status != 404:  # Si el Job no existe, ignoramos el error 404
-                raise
-
-        # Preparar contenedor
-        container = client.V1Container(
-            name="job-container",
-            image=image_name,
-            # image_pull_policy="IfNotPresent",
-            image_pull_policy="Always",
-            env_from=[
-                # Cargar todas las variables desde el ConfigMap
-                client.V1EnvFromSource(
-                    config_map_ref=client.V1ConfigMapEnvSource(name=configmap_name)
-                ),
-                # Cargar todas las variables desde el Secret
-                client.V1EnvFromSource(
-                    secret_ref=client.V1SecretEnvSource(name=secret_name)
-                )
+            cmd = [
+                'kubectl', 'get', 'job', job_name, 
+                '-n', namespace, 
+                '-o', 'jsonpath={.status.conditions[?(@.type=="Complete")].status}'
             ]
-        )
-        
-        # Crear template del Pod
-        template = client.V1PodTemplateSpec(
-            spec=client.V1PodSpec(
-                containers=[container],
-                restart_policy="Never"
-            )
-        )
-        
-        # Crear especificación del Job
-        job_spec = client.V1JobSpec(
-            template=template,
-            backoff_limit=0
-        )
-        
-        # Crear objeto Job
-        job = client.V1Job(
-            api_version="batch/v1",
-            kind="Job",
-            metadata=client.V1ObjectMeta(
-                name=job_name,
-                namespace=namespace
-            ),
-            spec=job_spec
-        )
-
-        time.sleep(2)
-        try:
-            # Intentar crear el Job
-            v1.create_namespaced_job(namespace=namespace, body=job)
-            logger.info("✅ Job creado en Kubernetes")
-        except ApiException as e:
-            if e.status == 409:  # Código 409 indica que el todavía existe
-                time.sleep(5)
-                try:
-                    # Intentar crear el Job
-                    v1.create_namespaced_job(namespace=namespace, body=job)
-                    logger.info("✅ Job creado en Kubernetes")
-                except ApiException as e:
-                    raise
-            else:
-                raise
-    
-    except Exception as e:
-        logger.error(f"❌ Error al crear/actualizar el Job: {str(e)}")
-        raise RuntimeError(f"Error al crear/actualizar el Job: {str(e)}")
-    
-    return job_name
-
-@task(retries=40, retry_delay_seconds=3)  # 2 minutos de timeout, chequea cada 3 segundos
-def get_job_pod(job_name: str, namespace: str = "default") -> str:
-    """Task que espera y obtiene el nombre del pod creado por un Job"""
-    logger = get_run_logger()
-    
-    try:
-        config.load_kube_config()
-        v1 = client.CoreV1Api()
-        
-        logger.info(f"🔍 Buscando pod para el job {job_name}")
-        pod_name = check_pod_exists(v1, namespace, job_name)
-        
-        if pod_name:
-            logger.info(f"✅ Pod encontrado: {pod_name}")
-            return pod_name
+            _, complete_status, _ = run_command(cmd)
             
-        raise ValueError("Pod no encontrado")
+            if complete_status.strip() == "True":
+                logger.info(f"Job completado exitosamente")
+                pod_name = get_pod_name(job_name, namespace)
+                show_pod_logs(pod_name, namespace)
+                return
+            
+            # Verificar si falló
+            cmd = [
+                'kubectl', 'get', 'job', job_name, 
+                '-n', namespace, 
+                '-o', 'jsonpath={.status.conditions[?(@.type=="Failed")].status}'
+            ]
+            _, failed_status, _ = run_command(cmd)
+            
+            if failed_status.strip() == "True":
+                logger.error(f"Job falló")
+                pod_name = get_pod_name(job_name, namespace)
+                show_pod_logs(pod_name, namespace)
+                raise RuntimeError(f"El job '{job_name}' falló. Revisa los logs para más detalles.")
+            
+            # También verificar si hay pods fallidos
+            pod_name = get_pod_name(job_name, namespace)
+            if pod_name:
+                cmd = [
+                    'kubectl', 'get', 'pod', pod_name, 
+                    '-n', namespace, 
+                    '-o', 'jsonpath={.status.phase}'
+                ]
+                _, pod_status, _ = run_command(cmd)
+                
+                if pod_status.strip() == "Failed":
+                    logger.error(f"Pod falló: {pod_name}")
+                    show_pod_logs(pod_name, namespace)
+                    raise RuntimeError(f"El pod '{pod_name}' falló. Revisa los logs para más detalles.")
+        
+        except CommandError as e:
+            logger.warning(f"Error al verificar estado del job: {str(e)}")
+        
+        # Esperar antes de verificar de nuevo
+        logger.info(f"Job en progreso, esperando {check_interval}s...")
+        time.sleep(check_interval)
+    
+    # Si llegamos aquí, se excedió el timeout
+    logger.error(f"Timeout excedido ({timeout}s)")
+    pod_name = get_pod_name(job_name, namespace)
+    show_pod_logs(pod_name, namespace)
+    raise RuntimeError(f"El job '{job_name}' excedió el tiempo de espera de {timeout}s.")
+
+
+def main() -> int:
+    """
+    Función principal del script.
+    
+    Returns:
+        int: Código de salida (0 si todo fue exitoso, 1 en caso de error).
+    """
+    try:
+        args = parse_arguments()
+        script_dir = Path(__file__).resolve().parent
+        
+        # Verificar prerrequisitos
+        check_prerequisites()
+        
+        # Preparar directorio para Docker
+        dockerfile_dir = script_dir / 'docker' / 'app'
+        flow_name = setup_dockerfile_dir(
+            flow_script_path=args.flow_script.resolve(), 
+            requirements_path=args.requirements.resolve(),
+            data_path=args.data.resolve(),
+            base_image_name=args.base_image,
+            dockerfile_dir=dockerfile_dir
+        )
+        
+        # Construir imagen Docker
+        image_name = build_docker_image(dockerfile_dir, args.image_name)
+        
+        # Preparar directorio para Kubernetes
+        kubernetes_dir = script_dir / 'kubernetes'
+        
+        # Aplicar recursos de Kubernetes
+        configmap_name = apply_configmap(
+            kubernetes_dir=kubernetes_dir,
+            namespace=args.namespace
+        )
+        
+        secret_name = apply_secret(
+            kubernetes_dir=kubernetes_dir,
+            namespace=args.namespace
+        )
+        
+        # Desplegar en Kubernetes
+        deploy_to_kubernetes(
+            flow_name=flow_name,
+            image_name=image_name,
+            configmap_name=configmap_name,
+            secret_name=secret_name,
+            kubernetes_dir=kubernetes_dir,
+            namespace=args.namespace,
+            timeout=args.timeout
+        )
+        
+        logger.info("\nPuedes ver los resultados detallados en Prefect Cloud")
+        logger.info(f"URL de Prefect: {PREFECT_API_URL}")
+        
+        return 0
         
     except Exception as e:
-        logger.error(f"❌ Error al buscar el pod: {str(e)}")
-        raise
+        logger.error(f"Error durante la ejecución: {str(e)}")
+        if logger.level == logging.DEBUG:
+            logger.error(traceback.format_exc())
+        return 1
 
-@task
-def cleanup(temp_dir: Path):
-    """Limpia archivos temporales"""
-    logger = get_run_logger()
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-    logger.info("✅ Limpieza completada")
-
-
-@flow(name="deploy-prefect-to-k8s")
-def deploy_flow_to_kubernetes(script_path: str, namespace: str = "default", requirements_path: str =str(PROJECT_ROOT / 'requirements.txt'), data_dir_path: str = str(PROJECT_ROOT / 'data')):
-    logger = get_run_logger()
-    script_path = Path(script_path)
-    requirements_path = Path(requirements_path) if requirements_path else None
-    validate_environment()
-    secret_name = create_kubernetes_secret(namespace)
-    configmap_name = create_kubernetes_configmap(namespace)
-    temp_dir, dockerfile_path = create_Dockerfile(script_path, requirements_path, data_dir_path)
-    image_name = build_docker_image(temp_dir, dockerfile_path)
-    job_name = create_kubernetes_job(image_name, configmap_name, secret_name, namespace)
-    pod_name = get_job_pod(job_name, namespace)
-    cleanup(temp_dir)
-    logger.info(f"\n🚀 Despliegue completado!\n Para ver el job ejecute:\n kubectl logs -f {pod_name} --namespace {namespace}")
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description='Despliega un flujo de Prefect en Kubernetes')
-    parser.add_argument('script_path', type=str, help='Ruta al script de Python con el flujo de Prefect')
-    parser.add_argument('--namespace', type=str, default='default', help='Namespace de Kubernetes (opcional)')
-    parser.add_argument('--requirements', type=str, default=str(PROJECT_ROOT / 'requirements.txt'), help='Ruta al archivo requirements.txt (opcional)')
-    parser.add_argument('--data', type=str, default=str(PROJECT_ROOT / 'data'), help='Ruta al directorio de datos (opcional)')
-    args = parser.parse_args()
-    deploy_flow_to_kubernetes(script_path=args.script_path, namespace=args.namespace, requirements_path=args.requirements, data_dir_path=args.data)
+    exit(main())

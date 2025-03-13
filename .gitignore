@@ -1,2 +1,12 @@
 # Environment variables
 .env
+
+# Python
+__pycache__/
+
+# logs
+*.log
+
+# Archivos creados desde el script del entorno
+Entorno/docker/app/
+Entorno/kubernetes/
