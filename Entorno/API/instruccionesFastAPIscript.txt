@@ -1,0 +1,23 @@
+
+
+Ejecutar el script:
+uvicorn fastAPI:app --host 0.0.0.0 --port 8000
+
+Pide una atenticación para conetarse a Dagshub,
+conectarse con cuenta de google cualquiera, personal o la de la auditoría
+
+
+Cuando tengamos los modelos distintos para hacer la spredicciones los necesito para que
+las predicciones no sean solo llamadas a un mimso modelo, sino que dependiendo de lo que
+se quiere predecir se llame a un modelo u otro.
+
+Además de que tendré que controlar las versiones además del nombre del modelo
+
+
+por el momenot se hacen peticiones con Postman a http://127.0.0.1:8000/predict
+
+y en el body:
+
+
+
+y nos devuelve el resultado de la petición
