@@ -10,3 +10,5 @@ __pycache__/
 # Archivos creados desde el script del entorno
 Entorno/docker/app/
 Entorno/kubernetes/
+
+sgba1_env/*
