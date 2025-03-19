@@ -1,19 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: modelo-ml
+  name: fastapi-deployment
 spec:
-  replicas: 3
+  replicas: 3  # Número de réplicas (aumentarlo si necesitamos más capacidad)
   selector:
     matchLabels:
-      app: modelo-ml
+      app: fastapi
   template:
     metadata:
       labels:
-        app: modelo-ml
+        app: fastapi
     spec:
       containers:
-      - name: modelo-ml
-        image: tu-imagen-en-dockerhub
-        ports:
-        - containerPort: 8000
+        - name: fastapi
+          image: <tu-usuario>/mi-fastapi-app:latest  # Reemplaza con tu usuario de Docker Hub
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow"
+            - name: MLFLOW_TRACKING_USERNAME
+              value: "auditoria.SGBA1"
+            - name: MLFLOW_TRACKING_PASSWORD
+              value: "ee9be1f2d99f10b3647e4bccee075e65178ecf03"
