@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: fastapi
-          image: <tu-usuario>/mi-fastapi-app:latest  # Reemplaza con tu usuario de Docker Hub
+          image: joanbg/mi-fastapi-app:latest  # Reemplaza con tu usuario de Docker Hub
           ports:
             - containerPort: 8000
           env:
