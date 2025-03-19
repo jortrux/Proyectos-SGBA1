@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
+import glob
 
 # --- Función para crear las columnas temporales	
 def extract_temporal_features(df, date_column='fecha'):
@@ -226,10 +227,6 @@ def direccion_viento_a_seno_coseno(df, col_dir='dir'):
 
     return df
 
-os.chdir('repositorios/Proyectos-SGBA1/data') # Poner la carpeta data como directorio actual
-
-df_test = pd.read_csv('processed/datos_clima/0200E_clima_completo.csv')
-
 def procesar_archivo_clima(ruta_entrada, ruta_salida):
     """
     Procesa un archivo de datos climáticos y lo guarda en un formato específico.
@@ -285,5 +282,21 @@ def procesar_archivo_clima(ruta_entrada, ruta_salida):
     
     return df
 
-df_procesado = procesar_archivo_clima('processed/datos_clima/0200E_clima_completo.csv', 
-                                     'processed/datos_clima/0200E_clima_numerizado')
+# Guarda la ubicación actual del script
+script_dir = os.path.dirname(os.path.abspath(__file__))
+working_dir = script_dir.split('data/')[0]
+os.chdir(working_dir) # Poner la carpeta data como directorio actual
+print(f"Directorio actual: {os.getcwd()}")
+
+# Process all climate files ending with _clima_completo.csv
+
+clima_files = glob.glob('data/processed/datos_clima/*_clima_completo.csv')
+
+for file_path in clima_files:
+    # Extract the filename without extension to use as output name
+    base_name = file_path.rsplit('.', 1)[0]  # Remove extension
+    output_path = base_name.replace('_completo', '_numerizado')
+    
+    print(f"Processing {file_path}...")
+    df_procesado = procesar_archivo_clima(file_path, output_path)
+    print(f"Finished processing {file_path}\n")
