@@ -1,6 +1,6 @@
 outs:
-- md5: 9f8bf0bb9da8131b6a47c63258d7b9bd.dir
-  size: 6937016
-  nfiles: 4
+- md5: 0f561115cf9ebe8ee7bd6cc406ea875d.dir
+  size: 11330555
+  nfiles: 5
   hash: md5
   path: datos_precio
