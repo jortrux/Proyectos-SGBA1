@@ -1,0 +1,5 @@
+outs:
+- md5: 0346ba2f4bea0e0bf9a451857520768b
+  size: 103092
+  hash: md5
+  path: datos_8019_2020-04-04T01:00:00UTC_2020-10-01T01:00:00UTC.json
