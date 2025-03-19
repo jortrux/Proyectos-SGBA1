@@ -17,7 +17,7 @@ os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
 
 # Iniciar DAGsHub con autenticación
 dagshub.auth.add_app_token(DAGSHUB_TOKEN)
-dagshub.init(repo_owner=DAGSHUB_USERNAME, repo_name="SGBA1-smartgrids", mlflow=True)
+dagshub.init(repo_owner=DAGSHUB_USERNAME, repo_name="Proyectos-SGBA1", mlflow=True)
 
 # Configurar MLflow con autenticación
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
