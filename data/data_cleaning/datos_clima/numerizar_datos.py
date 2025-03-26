@@ -79,7 +79,7 @@ def minutos_a_seno_coseno(minutos_array):
     
     return seno, coseno
 # --- Función para procesar columnas de tiempo en un dataframe
-def procesar_horas_minutos(df, cols_tiempo=['horatmin', 'horatmax', 'horaracha']):
+def procesar_horas_minutos(df, cols_tiempo=['horatmin', 'horatmax', 'horaracha', 'horaHrMax', 'horaHrMin']):
     """
     Procesa columnas de tiempo convirtiéndolas a minutos y representación cíclica.
     

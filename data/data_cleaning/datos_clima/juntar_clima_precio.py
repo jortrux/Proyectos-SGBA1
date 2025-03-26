@@ -119,7 +119,7 @@ print(df_clima.isna().sum().sum())
 df_precio = pd.read_csv('data/processed/datos_precio/precio_consumo_electrico_timestamp_media.csv')
 df_precio['timestamp'] = pd.to_datetime(df_precio['timestamp'])
 df_precio['fecha'] = df_precio['timestamp'].dt.date
-df_precio.drop(['timestamp', 'consumo_kwh', 'coste_euros'], axis=1, inplace=True)
+df_precio.drop(['consumo_kwh', 'coste_euros'], axis=1, inplace=True)
 
 df_precio['fecha'] = pd.to_datetime(df_precio['fecha'])
 df_clima['fecha'] = pd.to_datetime(df_clima['fecha'])
