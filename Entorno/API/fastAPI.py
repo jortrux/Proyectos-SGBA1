@@ -2,45 +2,38 @@ import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
-import mlflow.pyfunc
+import mlflow
+import mlflow.xgboost
 import dagshub
-from typing import List
+from typing import List, Union
 
-# Configurar credenciales de DAGsHub desde variables de entorno
+# Configurar autenticación para DAGsHub y MLflow desde variables de entorno o por defecto
 DAGSHUB_USERNAME = os.getenv("DAGSHUB_USERNAME", "auditoria.SGBA1")
 DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN", "ee9be1f2d99f10b3647e4bccee075e65178ecf03")
 
-# Configurar autenticación para DAGsHub y MLflow
+# Configurar MLflow con DAGsHub
 os.environ["MLFLOW_TRACKING_URI"] = f"https://dagshub.com/{DAGSHUB_USERNAME}/Proyectos-SGBA1.mlflow"
 os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
 os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
 
-# Iniciar DAGsHub con autenticación
 dagshub.auth.add_app_token(DAGSHUB_TOKEN)
 dagshub.init(repo_owner=DAGSHUB_USERNAME, repo_name="Proyectos-SGBA1", mlflow=True)
+mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
 
-# Configurar MLflow con autenticación
-mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
-
-# Modelos disponibles en DAGsHub
+# Modelos disponibles
 MODELOS_DISPONIBLES = {
     "consumo_hogar": "XGBoost-Consumo-Hogar"
 }
 
-
-# Caché de modelos para evitar cargas repetidas
+# Caché para modelos
 model_cache = {}
 
 def obtener_ultima_version_modelo(model_name: str) -> int:
-    """Obtiene la última versión registrada del modelo en DAGsHub."""
+    from mlflow.tracking import MlflowClient
+    client = MlflowClient()
     try:
-        client = mlflow.MlflowClient()
-        versions = client.get_latest_versions(model_name)
-        if versions:
-            print(f"Versiones disponibles para el modelo {model_name}: {versions}")
-            return max(int(v.version) for v in versions)  # Obtiene la versión más alta
-        else:
-            raise ValueError(f"No hay versiones disponibles para el modelo {model_name}")
+        versions = client.get_latest_versions(model_name, stages=["None", "Production"])
+        return int(versions[0].version)
     except Exception as e:
         raise RuntimeError(f"Error obteniendo la última versión del modelo '{model_name}': {e}")
 
@@ -54,45 +47,34 @@ def cargar_modelo(model_key: str):
 
     try:
         if model_key not in model_cache:
-            print(f"Cargando modelo '{model_name}' versión {model_version} desde MLflow...")
-
-            if model_name.startswith("XGBoost"):
-                model_cache[model_key] = mlflow.xgboost.load_model(model_uri)
-            else:
-                model_cache[model_key] = mlflow.pyfunc.load_model(model_uri)
-
+            print(f"Cargando modelo '{model_name}' versión {model_version}...")
+            # Este modelo es XGBoost puro
+            model_cache[model_key] = mlflow.xgboost.load_model(model_uri)
         return model_cache[model_key]
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al cargar el modelo '{model_name}': {e}")
 
-# Iniciar FastAPI
+# FastAPI
 app = FastAPI()
 
 @app.get("/")
 def home():
-    return {"message": "API de predicción con MLflow y FastAPI. Modelos disponibles: precio_luz, consumo_hogar"}
+    return {"message": "API de predicción para Consumo Hogar usando XGBoost en Kubernetes"}
 
-# Definir el esquema de entrada
 class PredictionInput(BaseModel):
-    model_type: str  # Modelo a utilizar: "precio_luz" o "consumo_hogar"
-    ds: List[str]  # Lista de fechas en formato string
+    model_type: str
+    features: List[dict]  # Cada dict es una fila con sus columnas
 
 @app.post("/predict")
 def predict(data: PredictionInput):
-    """Realiza predicciones usando el modelo seleccionado."""
     if data.model_type not in MODELOS_DISPONIBLES:
         raise HTTPException(status_code=400, detail=f"Modelo no válido. Opciones: {list(MODELOS_DISPONIBLES.keys())}")
 
-    # Cargar modelo correspondiente
     modelo = cargar_modelo(data.model_type)
 
     try:
-        # Convertir la lista de fechas en un DataFrame con la columna "ds"
-        df = pd.DataFrame({"ds": data.ds})
-        predictions = modelo.predict(df)
-
-        # Convertir a JSON
-        return {"model": data.model_type, "prediction": predictions.to_dict(orient="records")}
+        df = pd.DataFrame(data.features)
+        prediction = modelo.predict(df)
+        return {"model": data.model_type, "prediction": prediction.tolist()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error en predicción: {e}")
