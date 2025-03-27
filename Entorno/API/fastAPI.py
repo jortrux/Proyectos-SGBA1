@@ -11,7 +11,7 @@ DAGSHUB_USERNAME = os.getenv("DAGSHUB_USERNAME", "auditoria.SGBA1")
 DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN", "ee9be1f2d99f10b3647e4bccee075e65178ecf03")
 
 # Configurar autenticación para DAGsHub y MLflow
-os.environ["MLFLOW_TRACKING_URI"] = f"https://dagshub.com/{DAGSHUB_USERNAME}/SGBA1-smartgrids.mlflow"
+os.environ["MLFLOW_TRACKING_URI"] = f"https://dagshub.com/{DAGSHUB_USERNAME}/Proyectos-SGBA1.mlflow"
 os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
 os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
 
@@ -24,9 +24,9 @@ mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
 
 # Modelos disponibles en DAGsHub
 MODELOS_DISPONIBLES = {
-    "precio_luz": "Prophet-Precio-Luz",
-    "consumo_hogar": "Prophet-Consumo-Hogar"
+    "consumo_hogar": "XGBoost-Consumo-Hogar"
 }
+
 
 # Caché de modelos para evitar cargas repetidas
 model_cache = {}
@@ -37,6 +37,7 @@ def obtener_ultima_version_modelo(model_name: str) -> int:
         client = mlflow.MlflowClient()
         versions = client.get_latest_versions(model_name)
         if versions:
+            print(f"Versiones disponibles para el modelo {model_name}: {versions}")
             return max(int(v.version) for v in versions)  # Obtiene la versión más alta
         else:
             raise ValueError(f"No hay versiones disponibles para el modelo {model_name}")
@@ -44,21 +45,24 @@ def obtener_ultima_version_modelo(model_name: str) -> int:
         raise RuntimeError(f"Error obteniendo la última versión del modelo '{model_name}': {e}")
 
 def cargar_modelo(model_key: str):
-    """Carga el modelo más reciente desde MLflow en DAGsHub."""
     if model_key not in MODELOS_DISPONIBLES:
         raise ValueError(f"Modelo no reconocido: {model_key}")
 
     model_name = MODELOS_DISPONIBLES[model_key]
-    
-    # Obtener la última versión registrada en DAGsHub
     model_version = obtener_ultima_version_modelo(model_name)
     model_uri = f"models:/{model_name}/{model_version}"
 
     try:
         if model_key not in model_cache:
             print(f"Cargando modelo '{model_name}' versión {model_version} desde MLflow...")
-            model_cache[model_key] = mlflow.pyfunc.load_model(model_uri)
+
+            if model_name.startswith("XGBoost"):
+                model_cache[model_key] = mlflow.xgboost.load_model(model_uri)
+            else:
+                model_cache[model_key] = mlflow.pyfunc.load_model(model_uri)
+
         return model_cache[model_key]
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al cargar el modelo '{model_name}': {e}")
 

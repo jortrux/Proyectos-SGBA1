@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fastapi
+  template:
+    metadata:
+      labels:
+        app: fastapi
+    spec:
+      containers:
+        - name: fastapi
+          image: joanbg/mi-fastapi-app:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "https://dagshub.com/auditoria.SGBA1/SGBA1-smartgrids.mlflow"
+            - name: MLFLOW_TRACKING_USERNAME
+              value: "auditoria.SGBA1"
+            - name: MLFLOW_TRACKING_PASSWORD
+              value: "ee9be1f2d99f10b3647e4bccee075e65178ecf03"
