@@ -116,10 +116,14 @@ print(df_clima.isna().sum().sum())
 #     print(f"{col}: {nan_count} NaN")
 
 # Merge con el clima
-df_precio = pd.read_csv('data/processed/datos_precio/precio_consumo_electrico_timestamp_media.csv')
+df_precio = pd.read_csv('data/processed/datos_precio/pvpc.csv')
+
+df_precio.rename(columns={'Timestamp': 'timestamp'}, inplace=True)
+df_precio.rename(columns={'PVPC': '€/kwh'}, inplace=True)
+
 df_precio['timestamp'] = pd.to_datetime(df_precio['timestamp'])
 df_precio['fecha'] = df_precio['timestamp'].dt.date
-df_precio.drop(['consumo_kwh', 'coste_euros'], axis=1, inplace=True)
+# df_precio.drop(['consumo_kwh', 'coste_euros'], axis=1, inplace=True)
 
 df_precio['fecha'] = pd.to_datetime(df_precio['fecha'])
 df_clima['fecha'] = pd.to_datetime(df_clima['fecha'])
@@ -151,3 +155,5 @@ for particula in lista_particulas_eliminar:
 
 df_merged.to_parquet('data/processed/datos_precio/clima_precio_merged_recortado.parquet')
 df_merged.to_csv('data/processed/datos_precio/clima_precio_merged_recortado.csv', index=False)
+
+print(df_merged.columns)
