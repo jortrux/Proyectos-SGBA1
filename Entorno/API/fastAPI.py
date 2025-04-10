@@ -63,9 +63,7 @@ def predict(data: PredictionInput):
         df["hour"] = df["ds"].dt.hour
         df["weekday"] = df["ds"].dt.weekday
         df["is_weekend"] = df["weekday"].isin([5, 6]).astype(int)
-        df["is_holiday"] = 0  # o lógica real
-
-        # Meteorología: puedes usar valores fijos o conectarlo a una API real
+        df["is_holiday"] = 0  
         df["tmed"] = 17.0
         df["tmin"] = 12.0
         df["tmax"] = 22.0
