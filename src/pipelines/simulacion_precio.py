@@ -4,11 +4,11 @@ from pipeline_precio import (
     cargar_dataset_precio,
     preparar_features_precio,
     cargar_modelo_precio,
-    # predecir_precio_48h
-    entrenar_modelo_precio,
+    entrenar_modelo_simple_precio,
     entrenar_modelo_precio_optuna,
-    log_experiment,
-    predecir_precio_48h,
+    reentrenar_modelo_precio,
+    log_full_experiment,
+    predecir_precio,
 )
 
 
@@ -20,41 +20,40 @@ from datetime import timedelta
 # dia_actual = pd.to_datetime("2020-01-01")
 # dia_final = pd.to_datetime("2020-03-01")
 
-# Inicializar entorno y cargar modelo inicial desde MLflow
-# Paso 1: Inicializar entorno
+dia_actual = pd.to_datetime("2019-06-01")
+dia_final = pd.to_datetime("2020-01-01")
+
 inicializar_entorno_precio()
-# # Paso 2: Cargar dataset
-# df_precio = cargar_dataset_precio()
-# # Paso 3: Preparar features
-# df_train, df_test = preparar_features_precio(df_precio, dia_actual, dia_final)
-# print(df_train.tail())
-# print(df_test.head())
-# print(df_test.tail())
-# # Paso 4: Cargar modelo
-# modelo = cargar_modelo_precio()
-# print(modelo)
-# # Paso 5: Predecir precio
-# # df_resultados = predecir_precio_48h(dia_actual, modelo)
 
-# Paso 6: Entrenar modelo
+model, scaler, results_df, best_params = entrenar_modelo_precio_optuna(
+    dia_fin_train=dia_actual, 
+    dia_fin_test=dia_final, 
+    n_trials=50)
 
-# model, scaler, resultados_df = entrenar_modelo_precio(
-#     dia_fin_train='2019-01-01',
-#     dia_fin_test='2020-01-01',
-# )
+log_full_experiment(
+    model=model,
+    scaler=scaler,
+    resultados_df=results_df,
+    best_params=best_params,
+    run_name="XGBoost_Optuna_estacion" + str(dia_actual) + "---" + str(dia_final)
+)
 
-# Paso 7: Entrenar modelo con Optuna
-# model, scaler, resultados_df, best_params = entrenar_modelo_precio_optuna(
-#     dia_fin_train='2019-01-01',
-#     dia_fin_test='2020-01-01',
-# )
+df_pred = predecir_precio(dia="2020-01-02", horas=72)
 
-# log_experiment(
-#     model=model,
-#     scaler=scaler,
-#     resultados_df=resultados_df,
-#     best_params=best_params
-# )
+print(df_pred)
 
-# Realizar predicciones
-predecir_precio_48h("2020-01-01")
+import matplotlib.pyplot as plt
+
+# Sort the DataFrame by timestamp before plotting
+df_pred = df_pred.sort_values(by='timestamp')
+
+plt.figure(figsize=(12, 6))
+plt.plot(df_pred['timestamp'], df_pred['prediccion_€/kwh'], marker='o', label='Predicción de Precio')
+plt.plot(df_pred['timestamp'], df_pred['€/kwh'], marker='x', label='Precio Real')
+plt.xlabel('Fecha')
+plt.ylabel('Precio de la Luz')
+plt.title('Predicción vs Precio Real de la Luz')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
