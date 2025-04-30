@@ -148,7 +148,7 @@ def cargar_modelo_precio():
 
     Output:
         model (Modelo): Modelo de predicción de precios.
-        scaler (StandardScaler): Scaler usado para entrenar el modelo.
+        scaler (StandardScanameler): Scaler usado para entrenar el modelo.
     """
     client = mlflow.tracking.MlflowClient()
     # Buscar todas las versiones del modelo
@@ -366,7 +366,7 @@ def log_full_experiment(model, scaler, resultados_df, best_params, run_name, reg
             )
 
 
-def reentrenar_modelo_precio(dia_fin_train, run_name, block_size=48):
+def reentrenar_modelo_precio(dia_fin_train, base_run_name, block_size=48):
     """
     Descripción:
         Reentrena el modelo de predicción usando los hiperparámetros de MLflow
@@ -390,11 +390,11 @@ def reentrenar_modelo_precio(dia_fin_train, run_name, block_size=48):
     # Buscar todas las runs con un nombre específico y seleccionar la de menor MAE
     runs = mlflow.search_runs(
         experiment_ids=[experiment_id],
-        filter_string=f"tags.mlflow.runName LIKE '%{run_name}%'",
+        filter_string=f"tags.mlflow.runName LIKE '%{base_run_name}%'",
         order_by=["metrics.mae_mean ASC"]
     )
     if runs.empty:
-        raise ValueError(f"No hay runs en el experimento que contengan '{run_name}' en el nombre para reentrenar el modelo.")
+        raise ValueError(f"No hay runs en el experimento que contengan '{base_run_name}' en el nombre para reentrenar el modelo.")
 
     best_run = runs.iloc[0]
     best_run_id = best_run.run_id
