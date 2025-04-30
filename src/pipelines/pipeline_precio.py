@@ -82,13 +82,14 @@ def preparar_features_precio(df, dia_actual, dia_final):
         "fecha", 
         # "anio",
         # "mes",
-        # "dia",
         "dia_semana",
         # "estacion",
-        # "tmed", 
-        # "velmedia", 
-        # "sol", 
-        # "prec_valor",
+        "tm", 
+        "velmedia", 
+        "racha",
+        "dir_"
+        "sol", 
+        "prec_valor",
         ]
     
     for column in df.columns:
@@ -103,6 +104,21 @@ def preparar_features_precio(df, dia_actual, dia_final):
     df_reducido["hora_coseno"] = np.cos(2 * np.pi * df_reducido["hora"] / 24)
     df_reducido.drop("hora", axis=1, inplace=True)
 
+    # Añadir medias móviles y estadísticas de ventana para la columna de precio
+    periodo_dia = 24
+    periodo_semana = 24 * 7
+    periodo_mes = 24 * 30
+    periodo_año = 24 * 365
+    window_sizes = [3, 6, 12, periodo_dia, periodo_semana, periodo_mes, periodo_año]
+    for w in window_sizes:
+        df_reducido[f'€/kwh_ma_{w}'] = df_reducido['€/kwh'].rolling(window=w, min_periods=1).mean()
+        df_reducido[f'€/kwh_std_{w}'] = df_reducido['€/kwh'].rolling(window=w, min_periods=1).std()
+        df_reducido[f'€/kwh_min_{w}'] = df_reducido['€/kwh'].rolling(window=w, min_periods=1).min()
+        df_reducido[f'€/kwh_max_{w}'] = df_reducido['€/kwh'].rolling(window=w, min_periods=1).max()
+    # Puedes añadir más estadísticas si lo deseas, por ejemplo, mediana:
+        df_reducido[f'€/kwh_median_{w}'] = df_reducido['€/kwh'].rolling(window=w, min_periods=1).median()
+    # Si tienes otras columnas numéricas relevantes, puedes repetir el proceso para ellas.
+
     # df_reducido["estacion_seno"] = np.sin(2 * np.pi * df_reducido["estacion"] / 4)
     # df_reducido["estacion_coseno"] = np.cos(2 * np.pi * df_reducido["estacion"] / 4)
     # df_reducido.drop("estacion", axis=1, inplace=True)
@@ -114,7 +130,7 @@ def preparar_features_precio(df, dia_actual, dia_final):
     df_entrenamiento = df_reducido[df_reducido['timestamp'] < pd.to_datetime(dia_actual)].copy()
 
     # Filtrar el DataFrame de validación desde el día actual hasta el día final (incluido)
-    df_validacion = df_reducido[(df_reducido['fecha'] >= dia_actual) & (df_reducido['fecha'] <= dia_final)].copy()
+    df_validacion = df_reducido[(df_reducido['timestamp'] >= dia_actual) & (df_reducido['timestamp'] <= dia_final)].copy()
 
     # print(f"Fecha mínima entrenamiento: {df_entrenamiento['fecha'].iloc[1]}, máxima: {df_entrenamiento['fecha'].max()}")
     # print(f"Fecha mínima validación: {df_validacion['fecha'].min()}, máxima: {df_validacion['fecha'].max()}")
@@ -125,6 +141,7 @@ def cargar_modelo_precio():
     """
     Descripción:
         Carga el modelo de predicción de precios y el scaler desde DagsHub usando MLflow.
+        Solo selecciona modelos cuyo nombre contiene 'reentrenado'.
 
     Params:
         Ninguno.
@@ -133,14 +150,25 @@ def cargar_modelo_precio():
         model (Modelo): Modelo de predicción de precios.
         scaler (StandardScaler): Scaler usado para entrenar el modelo.
     """
-    model = mlflow.pyfunc.load_model('models:/xgboost_precio_luz/latest')
-    # Descargar el scaler desde los artefactos del modelo registrado
     client = mlflow.tracking.MlflowClient()
-    latest = client.get_latest_versions("xgboost_precio_luz", stages=["None", "Staging", "Production"])
-    if not latest:
-        raise ValueError("No hay versiones registradas del modelo.")
-    run_id = latest[0].run_id
-    scaler_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="scaler/scaler.pkl")
+    # Buscar todas las versiones del modelo
+    all_versions = client.search_model_versions("name='xgboost_precio_luz'")
+    # Filtrar solo las versiones cuyo run_name contiene 'reentrenado'
+    reentrenado_versions = []
+    for v in all_versions:
+        run_id = v.run_id
+        run = mlflow.get_run(run_id)
+        run_name = run.data.tags.get("mlflow.runName", "")
+        if "reentrenamiento" in run_name.lower():
+            reentrenado_versions.append(v)
+    if not reentrenado_versions:
+        raise ValueError("No hay versiones registradas del modelo con 'reentrenado' en el nombre.")
+    # Seleccionar la versión más reciente (mayor version number)
+    best_version = max(reentrenado_versions, key=lambda v: int(v.version))
+    model_uri = f"models:/xgboost_precio_luz/{best_version.version}"
+    model = mlflow.pyfunc.load_model(model_uri)
+    # Descargar el scaler desde los artefactos del modelo registrado
+    scaler_path = mlflow.artifacts.download_artifacts(run_id=best_version.run_id, artifact_path="scaler/scaler.pkl")
     scaler = joblib.load(scaler_path)
     return model, scaler
 
@@ -232,12 +260,15 @@ def entrenar_modelo_precio_optuna(dia_fin_train, dia_fin_test, block_size=48, n_
     # 4) Función objetivo para Optuna
     def objective(trial):
         params = {
-            'n_estimators': trial.suggest_int('n_estimators', 50, 500),
-            'max_depth': trial.suggest_int('max_depth', 3, 12),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
-            'subsample': trial.suggest_float('subsample', 0.5, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-            'gamma': trial.suggest_float('gamma', 0.0, 5.0),
+            'n_estimators': trial.suggest_int('n_estimators', 50, 1000),
+            'max_depth': trial.suggest_int('max_depth', 3, 20),
+            'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.5, log=True),
+            'subsample': trial.suggest_float('subsample', 0.3, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 1.0),
+            'gamma': trial.suggest_float('gamma', 0.0, 10.0),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
+            'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 10.0),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 10.0),
             'random_state': 42
         }
         model = XGBRegressor(**params)
@@ -260,7 +291,7 @@ def entrenar_modelo_precio_optuna(dia_fin_train, dia_fin_test, block_size=48, n_
 
     # 5) Ejecuta estudio Optuna
     study = optuna.create_study(direction='minimize')
-    study.optimize(objective, n_trials=n_trials, n_jobs=10)
+    study.optimize(objective, n_trials=n_trials, n_jobs=-1)
     best_params = study.best_params
     best_params['random_state'] = 42
 
@@ -288,7 +319,7 @@ def entrenar_modelo_precio_optuna(dia_fin_train, dia_fin_test, block_size=48, n_
     resultados_df = pd.DataFrame(resultados)
     return model, scaler, resultados_df, best_params
 
-def log_full_experiment(model, scaler, resultados_df, best_params, run_name, train_X=None):
+def log_full_experiment(model, scaler, resultados_df, best_params, run_name, registrar_modelo=True):
     """
     Registra en MLflow:
       - hiperparámetros,
@@ -297,56 +328,58 @@ def log_full_experiment(model, scaler, resultados_df, best_params, run_name, tra
       - modelo y scaler,
       - y registra el modelo en el Model Registry.
     """
-    import mlflow
-    from mlflow.models.signature import infer_signature
-    import joblib
+    import os
+
     mlflow.set_experiment("xgboost_precio_luz")
     with mlflow.start_run(run_name=run_name) as run:
         # Log params and metrics
         mlflow.log_params(best_params)
-        mlflow.log_metric("rmse_mean", resultados_df["rmse"].mean())
-        mlflow.log_metric("mae_mean", resultados_df["mae"].mean())
-        mlflow.log_metric("r2_mean",  resultados_df["r2"].mean())
-        # Log results CSV
-        resultados_csv = "resultados_bloques.csv"
-        resultados_df.to_csv(resultados_csv, index=False)
-        mlflow.log_artifact(resultados_csv, artifact_path="metrics")
+        if resultados_df is not None and not resultados_df.empty:
+            mlflow.log_metric("rmse_mean", resultados_df["rmse"].mean())
+            mlflow.log_metric("mae_mean", resultados_df["mae"].mean())
+            mlflow.log_metric("r2_mean",  resultados_df["r2"].mean())
+            # Log results CSV
+            resultados_csv = os.path.join(folder_output, "resultados_bloques.csv")
+            resultados_df.to_csv(resultados_csv, index=False)
+            mlflow.log_artifact(resultados_csv, artifact_path="metrics")
+        
+        
         # Log scaler
         scaler_path = "scaler.pkl"
         joblib.dump(scaler, scaler_path)
         mlflow.log_artifact(scaler_path, artifact_path="scaler")
         # Log model with signature
-        if train_X is not None:
-            input_example = train_X.iloc[:2]
-            signature = infer_signature(train_X, model.predict(train_X))
-        else:
-            input_example = None
-            signature = None
+        input_example = None
+        signature = None
+
         mlflow.sklearn.log_model(
             model, 
             "model", 
             input_example=input_example, 
             signature=signature
         )
-        # Register model in Model Registry
-        mlflow.register_model(
+        # Register model in Model Registry solo si se solicita
+        if registrar_modelo:
+            mlflow.register_model(
             model_uri=f"runs:/{run.info.run_id}/model",
             name="xgboost_precio_luz"
-        )
-        # Clean up
-        import os
-        os.remove(resultados_csv)
-        os.remove(scaler_path)
+            )
 
-def reentrenar_modelo_precio(dia_fin_train, dia_fin_test, block_size=48):
+
+def reentrenar_modelo_precio(dia_fin_train, run_name, block_size=48):
     """
     Descripción:
-        Reentrena el modelo de predicción usando los hiperparametros de MLflow
-        y evalúa su rendimiento en bloques deslizantes de 48h.
+        Reentrena el modelo de predicción usando los hiperparámetros de MLflow
+        con todos los datos hasta `dia_fin_train` (sin validación, solo entrenamiento).
 
     Params:
-        dia_fin_train (str): Fecha y hora de corte para el entrenamiento.
-        dia_fin_test (str): Fecha y hora
+        dia_fin_train (str o datetime): Fecha y hora de corte para el entrenamiento.
+        block_size (int): No se usa en este caso, pero se mantiene por compatibilidad.
+
+    Output:
+        model: Modelo reentrenado.
+        scaler: Scaler ajustado.
+        best_params: Hiperparámetros usados.
     """
 
     experiment_name = "xgboost_precio_luz"
@@ -354,10 +387,14 @@ def reentrenar_modelo_precio(dia_fin_train, dia_fin_test, block_size=48):
     experiment = mlflow.get_experiment_by_name(experiment_name)
     experiment_id = experiment.experiment_id
 
-    # Buscar todas las runs y seleccionar la de menor MAE
-    runs = mlflow.search_runs(experiment_ids=[experiment_id], order_by=["metrics.mae_mean ASC"])
+    # Buscar todas las runs con un nombre específico y seleccionar la de menor MAE
+    runs = mlflow.search_runs(
+        experiment_ids=[experiment_id],
+        filter_string=f"tags.mlflow.runName LIKE '%{run_name}%'",
+        order_by=["metrics.mae_mean ASC"]
+    )
     if runs.empty:
-        raise ValueError("No hay runs en el experimento para reentrenar el modelo.")
+        raise ValueError(f"No hay runs en el experimento que contengan '{run_name}' en el nombre para reentrenar el modelo.")
 
     best_run = runs.iloc[0]
     best_run_id = best_run.run_id
@@ -379,82 +416,30 @@ def reentrenar_modelo_precio(dia_fin_train, dia_fin_test, block_size=48):
 
     # Cargar y preparar datos
     df = cargar_dataset_precio()
-    df_train, df_test = preparar_features_precio(df, dia_fin_train, dia_fin_test)
+    # Filtrar solo hasta dia_fin_train (excluido)
+    df_train = df[df['timestamp'] < pd.to_datetime(dia_fin_train)].copy()
 
-    train_X = df_train.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
+    # Preparar features
+    # Usar la misma lógica de preparar_features_precio pero solo para entrenamiento
+    df_train, _ = preparar_features_precio(df, dia_fin_train, dia_fin_train)  # El segundo valor no se usa
+
+    # Elimina las columnas si existen
+    columnas_a_eliminar = ['€/kwh', 'timestamp', 'fecha']
+    train_X = df_train.drop(columns=[col for col in columnas_a_eliminar if col in df_train.columns], axis=1)
     train_X = train_X.select_dtypes(include=['int64', 'float64', 'bool'])
     train_y = df_train['€/kwh']
 
     # Descargar el scaler desde los artefactos de la mejor run
-    scaler_artifact_path = mlflow.artifacts.download_artifacts(run_id=best_run_id, artifact_path="scaler/model.pkl")
+    scaler_artifact_path = mlflow.artifacts.download_artifacts(run_id=best_run_id, artifact_path="scaler/scaler.pkl")
     scaler = joblib.load(scaler_artifact_path)
     train_X_scaled = scaler.fit_transform(train_X)
-
-    test_X = df_test.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
-    test_X = test_X.select_dtypes(include=['int64', 'float64', 'bool'])
-    test_y = df_test['€/kwh']
-    test_X_scaled = scaler.transform(test_X)
 
     # Reentrenar modelo
     model = XGBRegressor(**best_params)
     model.fit(train_X_scaled, train_y)
 
-    # Evaluación por bloques
-    n_blocks = len(test_X_scaled) // block_size
-    resultados = []
-    for i in range(n_blocks):
-        start = i * block_size
-        end = start + block_size
-        Xb = test_X_scaled[start:end]
-        yb = test_y.iloc[start:end]
-        y_pred = model.predict(Xb)
-        resultados.append({
-            'bloque': i+1,
-            'inicio_bloque': df_test.index[start],
-            'rmse': root_mean_squared_error(yb, y_pred),
-            'mae': mean_absolute_error(yb, y_pred),
-            'r2': r2_score(yb, y_pred)
-        })
-
-    resultados_df = pd.DataFrame(resultados)
-
-    return model, scaler, resultados_df, best_params
-            
-# def predecir_precio(dia, horas=48):
-    """
-    Realiza una predicción de precios para las próximas `horas` a partir de un día dado.
-    
-    Params:
-        dia (str o datetime): Fecha y hora actual (inicio de predicción).
-        horas (int): Cantidad de horas a predecir (por defecto 48).
-    
-    Output:
-        df_resultados (DataFrame): DataFrame con las predicciones para las próximas `horas`.
-    """
-    import pandas as pd
-
-    # Cargar el modelo desde MLflow Model Registry
-    model, scaler = cargar_modelo_precio()
-
-    # Cargar y preparar los datos
-    df = cargar_dataset_precio()
-    dia = pd.to_datetime(dia)
-    dia_final = dia + pd.Timedelta(hours=horas-1)
-    _, df_pred = preparar_features_precio(df, dia, dia_final)
-
-    # Preparar X para predicción
-    X_pred = df_pred.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
-    X_pred = X_pred.select_dtypes(include=['int64', 'float64', 'bool'])
-    X_pred_scaled = scaler.transform(X_pred)
-
-    # Realizar predicción
-    y_pred = model.predict(X_pred_scaled)
-
-    # Crear DataFrame de resultados
-    df_resultados = df_pred.copy()
-    df_resultados['prediccion_€/kwh'] = y_pred
-
-    return df_resultados
+    # No hay evaluación ni resultados_df porque no hay validación
+    return model, scaler, best_params
 
 def predecir_precio(dia, horas=48, model=None, scaler=None):
     import pandas as pd
@@ -470,7 +455,8 @@ def predecir_precio(dia, horas=48, model=None, scaler=None):
     _, df_pred = preparar_features_precio(df, dia, dia_final)
 
     # Preparar X para predicción
-    X_pred = df_pred.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
+    columnas_a_eliminar = ['€/kwh', 'timestamp', 'fecha']
+    X_pred = df_pred.drop(columns=[col for col in columnas_a_eliminar if col in df_pred.columns], axis=1)
     X_pred = X_pred.select_dtypes(include=['int64', 'float64', 'bool'])
     X_pred_scaled = scaler.transform(X_pred)
 
@@ -482,183 +468,11 @@ def predecir_precio(dia, horas=48, model=None, scaler=None):
 
     return df_resultados
 
-def guardar_resultados_precio(df_resultados, dia):
-    pass
-
-
-def entrenar_modelo_rf_optuna(dia_fin_train, dia_fin_test, block_size=48, n_trials=50):
-    """
-    Entrena un RandomForestRegressor optimizando hiperparámetros con Optuna,
-    evalúa en bloques de `block_size` horas y devuelve el modelo final,
-    el scaler, el DataFrame de resultados por bloque y los mejores params.
-    """
-    df = cargar_dataset_precio()
-    df_train, df_test = preparar_features_precio(df, dia_fin_train, dia_fin_test)
-
-    train_X = df_train.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
-    train_X = train_X.select_dtypes(include=['int64', 'float64', 'bool'])
-    train_y = df_train['€/kwh']
-
-    scaler = StandardScaler()
-    train_X_scaled = scaler.fit_transform(train_X)
-
-    test_X = df_test.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
-    test_X = test_X.select_dtypes(include=['int64', 'float64', 'bool'])
-    test_y = df_test['€/kwh']
-    test_X_scaled = scaler.transform(test_X)
-
-    def objective(trial):
-        params = {
-            'n_estimators': trial.suggest_int('n_estimators', 50, 500),
-            'max_depth': trial.suggest_int('max_depth', 3, 20),
-            'min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
-            'min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 10),
-            'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2', None]),
-            'random_state': 42,
-            'n_jobs': -1
-        }
-        model = RandomForestRegressor(**params)
-        model.fit(train_X_scaled, train_y)
-
-        n_blocks = len(test_X_scaled) // block_size
-        maes = []
-        for i in range(n_blocks):
-            start, end = i*block_size, (i+1)*block_size
-            xb = test_X_scaled[start:end]
-            yb = test_y.iloc[start:end]
-            preds = model.predict(xb)
-            maes.append(mean_absolute_error(yb, preds))
-        return np.mean(maes)
-
-    study = optuna.create_study(direction='minimize')
-    study.optimize(objective, n_trials=n_trials)
-    best_params = study.best_params
-    best_params['random_state'] = 42
-    best_params['n_jobs'] = -1
-
-    model = RandomForestRegressor(**best_params)
-    model.fit(train_X_scaled, train_y)
-
-    n_blocks = len(test_X_scaled) // block_size
-    resultados = []
-    for i in range(n_blocks):
-        start = i * block_size
-        end = start + block_size
-        Xb = test_X_scaled[start:end]
-        yb = test_y.iloc[start:end]
-        y_pred = model.predict(Xb)
-        resultados.append({
-            'bloque': i+1,
-            'inicio_bloque': df_test.index[start],
-            'rmse': root_mean_squared_error(yb, y_pred),
-            'mae': mean_absolute_error(yb, y_pred),
-            'r2': r2_score(yb, y_pred)
-        })
-
-    resultados_df = pd.DataFrame(resultados)
-    return model, scaler, resultados_df, best_params
-
-def log_rf_experiment(model, scaler, resultados_df, best_params, run_name, train_X=None):
-    """
-    Registra en MLflow el experimento de RandomForest:
-        - hiperparámetros,
-        - métricas agregadas,
-        - resultados por bloque (CSV),
-        - modelo y scaler,
-        - y registra el modelo en el Model Registry.
-    """
-    mlflow.set_experiment("randomforest_precio_luz")
-    with mlflow.start_run(run_name=run_name) as run:
-        mlflow.log_params(best_params)
-        mlflow.log_metric("rmse_mean", resultados_df["rmse"].mean())
-        mlflow.log_metric("mae_mean", resultados_df["mae"].mean())
-        mlflow.log_metric("r2_mean",  resultados_df["r2"].mean())
-        resultados_csv = "resultados_bloques_rf.csv"
-        resultados_df.to_csv(resultados_csv, index=False)
-        mlflow.log_artifact(resultados_csv, artifact_path="metrics")
-        scaler_path = "scaler_rf.pkl"
-        joblib.dump(scaler, scaler_path)
-        mlflow.log_artifact(scaler_path, artifact_path="scaler")
-        if train_X is not None:
-            input_example = train_X.iloc[:2]
-            signature = infer_signature(train_X, model.predict(train_X))
-        else:
-            input_example = None
-            signature = None
-        mlflow.sklearn.log_model(
-            model, 
-            "model", 
-            input_example=input_example, 
-            signature=signature
-        )
-        mlflow.register_model(
-            model_uri=f"runs:/{run.info.run_id}/model",
-            name="randomforest_precio_luz"
-        )
-        os.remove(resultados_csv)
-        os.remove(scaler_path)
-
-def cargar_modelo_rf_precio():
-    """
-    Carga el modelo RandomForest y el scaler desde MLflow Model Registry.
-    """
-    model = mlflow.pyfunc.load_model('models:/randomforest_precio_luz/latest')
-    client = mlflow.tracking.MlflowClient()
-    latest = client.get_latest_versions("randomforest_precio_luz", stages=["None", "Staging", "Production"])
-    if not latest:
-        raise ValueError("No hay versiones registradas del modelo RandomForest.")
-    run_id = latest[0].run_id
-    scaler_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="scaler/scaler_rf.pkl")
-    scaler = joblib.load(scaler_path)
-    return model, scaler
-
-def predecir_precio_rf(dia, horas=48, model=None, scaler=None):
-    """
-    Realiza una predicción de precios usando RandomForest para las próximas `horas` a partir de un día dado.
-    """
-
-    if model is None or scaler is None:
-        model, scaler = cargar_modelo_rf_precio()
-
-    df = cargar_dataset_precio()
-    dia = pd.to_datetime(dia)
-    dia_final = dia + pd.Timedelta(hours=horas-1)
-    _, df_pred = preparar_features_precio(df, dia, dia_final)
-
-    X_pred = df_pred.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
-    X_pred = X_pred.select_dtypes(include=['int64', 'float64', 'bool'])
-    X_pred_scaled = scaler.transform(X_pred)
-
-    y_pred = model.predict(X_pred_scaled)
-    df_resultados = df_pred.copy()
-    df_resultados['prediccion_€/kwh'] = y_pred
-
-    return df_resultados
-
-
-if __name__ == "__main__":
-    # Ejemplo de entrenamiento y logging con RandomForest + Optuna
-    dia_fin_train = pd.to_datetime("2019-06-01")
-    dia_fin_test = pd.to_datetime("2020-01-01")
-    block_size = 48
-    n_trials = 10  # Puedes aumentar para mejor búsqueda
-
-    # Entrenamiento y optimización
-    model_rf, scaler_rf, resultados_rf, best_params_rf = entrenar_modelo_rf_optuna(
-        dia_fin_train, dia_fin_test, block_size=block_size, n_trials=n_trials
-    )
-
-    # Logging en MLflow
-    df = cargar_dataset_precio()
-    df_train, _ = preparar_features_precio(df, dia_fin_train, dia_fin_test)
-    train_X_rf = df_train.drop(['€/kwh', 'timestamp', 'fecha'], axis=1, errors='ignore')
-    train_X_rf = train_X_rf.select_dtypes(include=['int64', 'float64', 'bool'])
-    log_rf_experiment(model_rf, scaler_rf, resultados_rf, best_params_rf, run_name="rf_optuna", train_X=train_X_rf)
-
-    # Ejemplo de predicción con RandomForest
-    dia_pred = "2020-3-2"
-    horas_pred = 48
-    df_pred_rf = predecir_precio_rf(dia_pred, horas=horas_pred, model=model_rf, scaler=scaler_rf)
-    print(df_pred_rf.head())
-
-
+def guardar_resultados_precio(df_resultados, dia, horas=48):
+    if not os.path.exists(folder_output):
+        os.makedirs(folder_output)
+    # Formato de fecha solo con año, mes y día
+    fecha_str = pd.to_datetime(dia).strftime('%Y%m%d')
+    nombre_archivo = f"prediccion_precio_{fecha_str}_{horas/24}dias_predict.csv"
+    ruta_archivo = os.path.join(folder_output, nombre_archivo)
+    df_resultados.to_csv(ruta_archivo, index=False)
