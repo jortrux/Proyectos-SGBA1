@@ -1,0 +1,6 @@
+outs:
+- md5: 48f2114e67579826b03c03217304b7eb.dir
+  size: 17167520
+  nfiles: 15
+  hash: md5
+  path: datos_consumo

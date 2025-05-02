@@ -11,6 +11,10 @@ __pycache__/
 Entorno/docker/app/
 Entorno/kubernetes/
 
+<<<<<<< HEAD
+sgba1_env/*
+=======
 #Entorno
 sgba1_env/*
 
+>>>>>>> 29ebcba80e0c1b53b6b3912573ce8c41a12eb35d
