@@ -1,41 +1,39 @@
 import pandas as pd
 import numpy as np
 import os
-from datetime import timedelta
-from xgboost import XGBRegressor
 import joblib
+from prophet import Prophet
+from datetime import timedelta
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 import mlflow.pyfunc
 import dagshub
-from sklearn.metrics import mean_absolute_error, root_mean_squared_error
-
 
 # Variables globales
 modelo_consumo_path = 'modelo_consumo_reentrenado.pkl'
 folder_output = 'datos_simulacion'
 file_path_hogar = '../../data/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv'
 
-columnas_modelo_consumo = [
-    "hour", "weekday", "is_weekend", "is_holiday",
-    "tmed", "tmin", "tmax", "prec", "velmedia", "racha", "sol", "hrMedia", "año",
-    "lag_1h", "lag_24h", "rolling_3h", "rolling_24h", "delta",
-    "hour_sin", "hour_cos"
+FESTIVOS = [  # Festivos Barcelona
+    "2017-01-06","2017-04-14","2017-04-17","2017-05-01","2017-06-05","2017-06-24",
+    "2017-08-15","2017-09-11","2017-09-25","2017-10-12","2017-11-01","2017-12-06",
+    "2017-12-08","2017-12-25","2017-12-26","2018-01-01","2018-01-06","2018-03-30",
+    "2018-04-02","2018-05-01","2018-08-15","2018-09-11","2018-10-12","2018-11-01",
+    "2018-12-06","2018-12-08","2018-12-25","2018-12-26","2019-01-01","2019-04-19",
+    "2019-04-22","2019-05-01","2019-06-10","2019-06-24","2019-08-15","2019-09-11",
+    "2019-09-24","2019-10-12","2019-11-01","2019-12-06","2019-12-25","2019-12-26",
+    "2020-01-01","2020-01-06","2020-04-10","2020-04-13","2020-05-01","2020-06-01",
+    "2020-06-24","2020-08-15","2020-09-11","2020-09-24","2020-10-12","2020-12-08",
+    "2020-12-25","2020-12-26"
 ]
 
+regresores = [
+    'hour', 'weekday', 'is_weekend', 'is_holiday',
+    'tmed', 'tmin', 'tmax', 'prec', 'velmedia', 'racha', 'sol', 'hrMedia', 'year',
+    'lag_1h', 'lag_24h', 'rolling_3h', 'rolling_24h', 'delta',
+    'hour_sin', 'hour_cos'
+]
 
 def inicializar_entorno_consumo():
-    """
-    Descripción:
-        Inicializa el entorno del pipeline de consumo:
-        - Conecta con DagsHub.
-        - Elimina todos los archivos existentes en la carpeta de simulación.
-        - Elimina el modelo reentrenado si ya existe.
-
-    Params:
-        Ninguno.
-
-    Output:
-        Ninguno (efectos secundarios: limpieza de entorno).
-    """
     dagshub.init(repo_owner="auditoria.SGBA1", repo_name="Proyectos-SGBA1", mlflow=True)
 
     if os.path.exists(folder_output):
@@ -44,224 +42,137 @@ def inicializar_entorno_consumo():
     else:
         os.makedirs(folder_output)
 
-    if os.path.exists(modelo_consumo_path):
-        os.remove(modelo_consumo_path)
-
+    reentrenar_modelo_consumo("2020-01-01")
 
 def cargar_dataset_consumo():
-    """
-    Descripción:
-        Carga el dataset original de consumo de la casa, incluyendo variables climáticas y estructurales.
+    return pd.read_csv(file_path_hogar, parse_dates=["timestamp"])
 
-    Params:
-        Ninguno.
-
-    Output:
-        df (DataFrame): DataFrame con la columna 'timestamp' parseada como datetime.
-    """
-    return pd.read_csv(file_path_hogar, parse_dates=['timestamp'])
-
-
-def preparar_features_consumo(df):
-    """
-    Descripción:
-        Genera las variables necesarias para el modelo de predicción de consumo.
-        Aplica ingeniería de features: temporales, lags, rolling, senos/cosenos horarios, etc.
-
-    Params:
-        df (DataFrame): DataFrame original con columna 'timestamp' y 'consumo_kwh'.
-
-    Output:
-        df (DataFrame): DataFrame con columnas de features completas y sin NaNs.
-    """
+def preparar_features_prophet(df):
     df = df.copy()
-    df["hour"] = df["timestamp"].dt.hour
-    df["weekday"] = df["timestamp"].dt.weekday
+    df = df.rename(columns={"timestamp": "ds", "consumo_kwh": "y"})
+    df["year"] = df["ds"].dt.year
+    df["month"] = df["ds"].dt.month
+    df["day"] = df["ds"].dt.day
+    df["weekday"] = df["ds"].dt.weekday
+    df["hour"] = df["ds"].dt.hour
     df["is_weekend"] = (df["weekday"] >= 5).astype(int)
-    df["año"] = df["timestamp"].dt.year
-    df["lag_1h"] = df["consumo_kwh"].shift(1)
-    df["lag_24h"] = df["consumo_kwh"].shift(24)
-    df["rolling_3h"] = df["consumo_kwh"].rolling(3).mean()
-    df["rolling_24h"] = df["consumo_kwh"].rolling(24).mean()
-    df["delta"] = df["consumo_kwh"].diff()
+    df["is_holiday"] = df["ds"].dt.strftime("%Y-%m-%d").isin(FESTIVOS).astype(int)
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
-    return df.dropna()
-
+    df["lag_1h"] = df["y"].shift(1)
+    df["lag_24h"] = df["y"].shift(24)
+    df["rolling_3h"] = df["y"].shift(1).rolling(3).mean()
+    df["rolling_24h"] = df["y"].shift(1).rolling(24).mean()
+    df["delta"] = df["y"].diff().shift(1)
+    df.dropna(inplace=True)
+    return df
 
 def cargar_modelo_consumo():
-    """
-    Descripción:
-        Carga el modelo de MLflow desde el registry de DagsHub.
-
-    Params:
-        Ninguno.
-
-    Output:
-        modelo (mlflow.pyfunc.PyFuncModel): Modelo XGBoost en formato MLflow listo para predicción.
-    """
-    return mlflow.pyfunc.load_model("models:/XGBoost-Consumo-Hogar/latest")
+    if not os.path.exists(modelo_consumo_path):
+        raise FileNotFoundError("No se encontró el modelo local. Asegurate de ejecutar inicializar_entorno_consumo primero.")
+    return joblib.load(modelo_consumo_path)
 
 
 def predecir_consumo_por_dia(dia, modelo):
-    """
-    Descripción:
-        Genera predicciones de consumo horario para un día completo usando el modelo proporcionado.
-
-    Params:
-        dia (str o datetime): Día a predecir (por ejemplo "2020-01-01").
-        modelo (MLflow o XGBoost): Modelo entrenado para hacer predicción.
-
-    Output:
-        DataFrame con columnas: fecha, pred_consumo, real_consumo, error.
-    """
     df = cargar_dataset_consumo()
-    fecha_inicio = pd.to_datetime(dia) - pd.Timedelta(hours=48)
-    fecha_fin = pd.to_datetime(dia) + pd.Timedelta(hours=23)
-    df_pred = df[(df["timestamp"] >= fecha_inicio) & (df["timestamp"] <= fecha_fin)].copy()
-    df_pred = preparar_features_consumo(df_pred)
-    df_dia = df_pred[df_pred["timestamp"].dt.date == pd.to_datetime(dia).date()].copy()
+    df = df.rename(columns={"timestamp": "ds", "consumo_kwh": "y"})
+    fecha_inicio = pd.to_datetime(dia)
+    df_historia = df[df["ds"] < fecha_inicio].copy()
 
-    resultados = []
-    for _, row in df_dia.iterrows():
-        X_row = row[columnas_modelo_consumo].values.reshape(1, -1)
-        X_df = pd.DataFrame(X_row, columns=columnas_modelo_consumo)
-        X_df = X_df.astype({
-            "hour": int,
-            "weekday": int,
-            "is_weekend": int,
-            "is_holiday": int,
-            "tmed": float,
-            "tmin": float,
-            "tmax": float,
-            "prec": float,
-            "velmedia": float,
-            "racha": float,
-            "sol": float,
-            "hrMedia": float,
-            "año": int,
-            "lag_1h": float,
-            "lag_24h": float,
-            "rolling_3h": float,
-            "rolling_24h": float,
-            "delta": float,
-            "hour_sin": float,
-            "hour_cos": float
-        })
+    horas = pd.date_range(start=fecha_inicio, periods=24, freq='h')
+    df_pred = pd.DataFrame({'ds': horas})
+    df_pred["year"] = df_pred["ds"].dt.year
+    df_pred["month"] = df_pred["ds"].dt.month
+    df_pred["day"] = df_pred["ds"].dt.day
+    df_pred["weekday"] = df_pred["ds"].dt.weekday
+    df_pred["hour"] = df_pred["ds"].dt.hour
+    df_pred["is_weekend"] = (df_pred["weekday"] >= 5).astype(int)
+    df_pred["is_holiday"] = df_pred["ds"].dt.strftime("%Y-%m-%d").isin(FESTIVOS).astype(int)
+    df_pred["hour_sin"] = np.sin(2 * np.pi * df_pred["hour"] / 24)
+    df_pred["hour_cos"] = np.cos(2 * np.pi * df_pred["hour"] / 24)
 
-        y_real = row["consumo_kwh"]
-        timestamp = row["timestamp"]
-        y_pred = modelo.predict(X_df)[0]
-        error = abs(y_real - y_pred)
-        resultados.append({
-            "fecha": timestamp,
-            "pred_consumo": y_pred,
-            "real_consumo": y_real,
-            "error": error
-        })
+    df_clima = df[["ds", 'tmed', 'tmin', 'tmax', 'prec', 'velmedia', 'racha', 'sol', 'hrMedia']].drop_duplicates('ds')
+    df_pred = df_pred.merge(df_clima, on='ds', how='left')
 
-    return pd.DataFrame(resultados)
+    df_total = pd.concat([df_historia[["ds", "y"]], df_pred[["ds"]]], ignore_index=True)
+    df_total = df_total.sort_values("ds").reset_index(drop=True)
+    df_total["lag_1h"] = df_total["y"].shift(1)
+    df_total["lag_24h"] = df_total["y"].shift(24)
+    df_total["rolling_3h"] = df_total["y"].shift(1).rolling(3).mean()
+    df_total["rolling_24h"] = df_total["y"].shift(1).rolling(24).mean()
+    df_total["delta"] = df_total["y"].diff().shift(1)
+    df_pred = df_pred.merge(df_total[["ds", "lag_1h", "lag_24h", "rolling_3h", "rolling_24h", "delta"]], on="ds", how="left")
+    df_pred.fillna(0, inplace=True)
 
+    forecast = modelo.predict(df_pred[["ds"] + regresores])
+    df_real = df[(df["ds"] >= fecha_inicio) & (df["ds"] < fecha_inicio + pd.Timedelta(hours=24))][["ds", "y"]]
+    resultado = forecast[["ds", "yhat"]].merge(df_real, on="ds", how="left")
+    resultado.rename(columns={"ds": "fecha", "yhat": "pred_consumo", "y": "real_consumo"}, inplace=True)
+    resultado["error"] = abs(resultado["pred_consumo"] - resultado["real_consumo"])
+    return resultado
 
 def guardar_resultados_consumo(df_resultado, dia):
-    """
-    Descripción:
-        Guarda las predicciones horarias del día en un único archivo acumulado.
-        Elimina las filas duplicadas si el día ya fue procesado.
-
-    Params:
-        df_resultado (DataFrame): DataFrame con columnas 'fecha', 'pred_consumo', 'real_consumo', 'error'.
-        dia (str o datetime): Día correspondiente a los datos.
-
-    Output:
-        Archivo CSV en carpeta 'datos_simulacion' con nombre 'predicciones_consumo.csv'.
-    """
-    archivo_predicciones = f"{folder_output}/predicciones_consumo.csv"
-
-    # Si ya existe, lo cargamos y eliminamos posibles filas duplicadas del mismo día
-    if os.path.exists(archivo_predicciones):
-        df_existente = pd.read_csv(archivo_predicciones, parse_dates=["fecha"])
-        fecha_dia = pd.to_datetime(dia).date()
-        df_existente = df_existente[df_existente["fecha"].dt.date != fecha_dia]
+    archivo_pred = f"{folder_output}/predicciones_consumo.csv"
+    if os.path.exists(archivo_pred):
+        df_existente = pd.read_csv(archivo_pred, parse_dates=["fecha"])
+        df_existente = df_existente[df_existente["fecha"].dt.date != pd.to_datetime(dia).date()]
         df_completo = pd.concat([df_existente, df_resultado], ignore_index=True)
     else:
         df_completo = df_resultado
-
     df_completo.sort_values("fecha", inplace=True)
-    df_completo.to_csv(archivo_predicciones, index=False)
-
-
+    df_completo.to_csv(archivo_pred, index=False)
 
 def reentrenar_modelo_consumo(dia):
-    """
-    Descripción:
-        Reentrena el modelo de consumo utilizando todos los datos hasta el día indicado.
-        Guarda el nuevo modelo entrenado localmente como archivo .pkl.
-
-    Params:
-        dia (str o datetime): Día límite (no inclusive) para los datos de entrenamiento.
-
-    Output:
-        modelo (XGBRegressor): Modelo reentrenado.
-    """
     df = cargar_dataset_consumo()
-    df_hasta = df[df["timestamp"] < (pd.to_datetime(dia) + timedelta(days=1))].copy()
-    df_train = preparar_features_consumo(df_hasta)
-    X = df_train[columnas_modelo_consumo]
-    y = df_train["consumo_kwh"]
-    modelo = XGBRegressor()
-    modelo.fit(X, y)
+    df = df[df["timestamp"] < pd.to_datetime(dia)]
+    df = preparar_features_prophet(df)
+    
+    from prophet import Prophet
+    df_festivos = pd.DataFrame({
+        "holiday": "festivo",
+        "ds": pd.to_datetime(FESTIVOS),
+        "lower_window": 0,
+        "upper_window": 1
+    })
+
+    modelo = Prophet(
+        daily_seasonality=True,
+        weekly_seasonality=True,
+        yearly_seasonality=True,
+        seasonality_mode='additive',
+        holidays=df_festivos
+    )
+    for r in regresores:
+        modelo.add_regressor(r)
+    modelo.fit(df[["ds", "y"] + regresores])
+
+    # Guardar en local
     joblib.dump(modelo, modelo_consumo_path)
     return modelo
 
+
 def calcular_metricas_consumo(dia):
-    """
-    Descripción:
-        Calcula las métricas MAE, RMSE y MAPE para un día a partir del archivo acumulado de predicciones.
-        Las guarda en 'metricas_consumo.csv' (una fila por día, acumulativa).
-
-    Params:
-        dia (str o datetime): Día para el cual se evalúan las predicciones.
-
-    Output:
-        Imprime las métricas por consola y actualiza el archivo global de métricas.
-    """
     archivo_pred = f"{folder_output}/predicciones_consumo.csv"
     archivo_metricas = f"{folder_output}/metricas_consumo.csv"
     dia_ts = pd.to_datetime(dia).normalize()
-
     if not os.path.exists(archivo_pred):
-        print(f"No se encontró el archivo de predicciones acumulado.")
+        print("No se encontró el archivo de predicciones.")
         return
 
-    # Cargar todas las predicciones y filtrar por día
     df = pd.read_csv(archivo_pred, parse_dates=["fecha"])
     df_dia = df[df["fecha"].dt.normalize() == dia_ts]
-
     if df_dia.empty:
-        print(f"No hay predicciones para el día {dia_ts.date()}.")
+        print(f"No hay predicciones para {dia_ts.date()}")
         return
 
-    # Cálculo de métricas
     mae = mean_absolute_error(df_dia["real_consumo"], df_dia["pred_consumo"])
-    rmse = root_mean_squared_error(df_dia["real_consumo"], df_dia["pred_consumo"])
+    rmse = mean_squared_error(df_dia["real_consumo"], df_dia["pred_consumo"]) ** 0.5
     df_no_ceros = df_dia[df_dia["real_consumo"] != 0]
     mape = (abs((df_no_ceros["real_consumo"] - df_no_ceros["pred_consumo"]) / df_no_ceros["real_consumo"])).mean() * 100
 
-    # Imprimir métricas
-    print(f"MAE:  {mae:.5f} kWh")
-    print(f"RMSE: {rmse:.5f} kWh")
-    print(f"MAPE: {mape:.2f} %")
+    print(f"MAE: {mae:.5f} kWh | RMSE: {rmse:.5f} kWh | MAPE: {mape:.2f} %")
+    nueva_fila = pd.DataFrame([{ "fecha": dia_ts, "MAE": mae, "RMSE": rmse, "MAPE": mape }])
 
-    # Crear nueva fila
-    nueva_fila = pd.DataFrame([{
-        "fecha": dia_ts,
-        "MAE": mae,
-        "RMSE": rmse,
-        "MAPE": mape
-    }])
-
-    # Actualizar archivo global de métricas
     if os.path.exists(archivo_metricas):
         df_metricas = pd.read_csv(archivo_metricas, parse_dates=["fecha"])
         df_metricas = df_metricas[df_metricas["fecha"] != dia_ts]
