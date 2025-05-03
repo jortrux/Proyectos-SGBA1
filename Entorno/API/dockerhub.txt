@@ -1,0 +1,7 @@
+
+
+
+############## Archivo para los pasos de docker hub
+
+docker tag mi-fastapi-app joanbg/mi-fastapi-app:latest
+docker push joanbg/mi-fastapi-app:latest

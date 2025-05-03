@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: fastapi-deployment
 spec:
-  replicas: 3  # Número de réplicas (aumentarlo si necesitamos más capacidad)
+  replicas: 2
   selector:
     matchLabels:
       app: fastapi
@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: fastapi
-          image: joanbg/mi-fastapi-app:latest  # Reemplaza con tu usuario de Docker Hub
+          image: joanbg/mi-fastapi-app:latest
           ports:
             - containerPort: 8000
           env:
