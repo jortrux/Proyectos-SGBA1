@@ -79,7 +79,7 @@ def predecir_dia(fecha, df_historia_completa):
     df_real = df_historia_completa[df_historia_completa["ds"].between(fecha_inicio, fecha_inicio + pd.Timedelta(hours=23))][["ds", "y"]]
 
     # Merge predicción + real
-    resultado = forecast[["ds", "yhat"]].merge(df_real, on="ds", how="left")
+    resultado = forecast.rename(columns={"yhat_ajustado": "yhat"})[["ds", "yhat"]].merge(df_real, on="ds", how="left")
 
     # Mostrar tabla
     print(f"Predicciones para {fecha}:")
