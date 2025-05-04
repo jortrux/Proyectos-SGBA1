@@ -72,7 +72,6 @@ def cargar_modelo_consumo():
         raise FileNotFoundError("No se encontró el modelo local. Asegurate de ejecutar inicializar_entorno_consumo primero.")
     return joblib.load(modelo_consumo_path)
 
-
 def predecir_consumo_por_dia(dia, modelo):
     df = cargar_dataset_consumo()
     df = df.rename(columns={"timestamp": "ds", "consumo_kwh": "y"})
@@ -104,12 +103,28 @@ def predecir_consumo_por_dia(dia, modelo):
     df_pred = df_pred.merge(df_total[["ds", "lag_1h", "lag_24h", "rolling_3h", "rolling_24h", "delta"]], on="ds", how="left")
     df_pred.fillna(0, inplace=True)
 
+    # ----------- PREDICCIÓN ----------------
     forecast = modelo.predict(df_pred[["ds"] + regresores])
+
+    # ----------- AJUSTE MANUAL DE PICOS ----------
+    forecast["hora"] = forecast["ds"].dt.hour
+    pesos_por_hora = {9: 0.25, 10: 0.3, 11: 0.2, 14: 0.15, 21: 0.1}
+    umbral_pico = 0.98
+
+    forecast["ajuste_pico"] = forecast.apply(
+        lambda row: pesos_por_hora.get(row["hora"], 0) if row["yhat"] < umbral_pico else 0,
+        axis=1
+    )
+    forecast["yhat"] = forecast["yhat"] + forecast["ajuste_pico"]
+
+    # ------------ MERGE CON VALORES REALES ------------
     df_real = df[(df["ds"] >= fecha_inicio) & (df["ds"] < fecha_inicio + pd.Timedelta(hours=24))][["ds", "y"]]
     resultado = forecast[["ds", "yhat"]].merge(df_real, on="ds", how="left")
+
     resultado.rename(columns={"ds": "fecha", "yhat": "pred_consumo", "y": "real_consumo"}, inplace=True)
     resultado["error"] = abs(resultado["pred_consumo"] - resultado["real_consumo"])
     return resultado
+
 
 def guardar_resultados_consumo(df_resultado, dia):
     archivo_pred = f"{folder_output}/predicciones_consumo.csv"
@@ -155,24 +170,40 @@ def calcular_metricas_consumo(dia):
     archivo_pred = f"{folder_output}/predicciones_consumo.csv"
     archivo_metricas = f"{folder_output}/metricas_consumo.csv"
     dia_ts = pd.to_datetime(dia).normalize()
+
     if not os.path.exists(archivo_pred):
         print("No se encontró el archivo de predicciones.")
         return
 
     df = pd.read_csv(archivo_pred, parse_dates=["fecha"])
     df_dia = df[df["fecha"].dt.normalize() == dia_ts]
+
     if df_dia.empty:
         print(f"No hay predicciones para {dia_ts.date()}")
         return
 
+    # Calcular métricas
     mae = mean_absolute_error(df_dia["real_consumo"], df_dia["pred_consumo"])
-    rmse = mean_squared_error(df_dia["real_consumo"], df_dia["pred_consumo"]) ** 0.5
-    df_no_ceros = df_dia[df_dia["real_consumo"] != 0]
-    mape = (abs((df_no_ceros["real_consumo"] - df_no_ceros["pred_consumo"]) / df_no_ceros["real_consumo"])).mean() * 100
+    rmse = mean_squared_error(df_dia["real_consumo"], df_dia["pred_consumo"], squared=False)
 
-    print(f"MAE: {mae:.5f} kWh | RMSE: {rmse:.5f} kWh | MAPE: {mape:.2f} %")
-    nueva_fila = pd.DataFrame([{ "fecha": dia_ts, "MAE": mae, "RMSE": rmse, "MAPE": mape }])
+    # SMAPE = 2 * |pred - real| / (|pred| + |real|), con protección para evitar división por cero
+    smape = 100 * np.mean(
+        2 * np.abs(df_dia["real_consumo"] - df_dia["pred_consumo"]) /
+        (np.abs(df_dia["real_consumo"]) + np.abs(df_dia["pred_consumo"]) + 1e-8)
+    )
 
+    # Mostrar métricas en consola
+    print(f"MAE: {mae:.5f} kWh | RMSE: {rmse:.5f} kWh | SMAPE: {smape:.2f} %")
+
+    # Guardar fila nueva
+    nueva_fila = pd.DataFrame([{
+        "fecha": dia_ts,
+        "MAE": mae,
+        "RMSE": rmse,
+        "SMAPE": smape
+    }])
+
+    # Guardar o actualizar archivo de métricas
     if os.path.exists(archivo_metricas):
         df_metricas = pd.read_csv(archivo_metricas, parse_dates=["fecha"])
         df_metricas = df_metricas[df_metricas["fecha"] != dia_ts]
