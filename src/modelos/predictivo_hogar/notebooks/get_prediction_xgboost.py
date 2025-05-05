@@ -66,12 +66,13 @@ def predecir_dia(fecha):
     df_pred["is_weekend"] = (df_pred["weekday"] >= 5).astype(int)
     df_pred["is_holiday"] = df_pred["timestamp"].dt.strftime("%Y-%m-%d").isin(FESTIVOS).astype(int)
 
-    # Variables adicionales del modelo
+    # Variables adicionales del modelo (sin fuga de información)
     df_pred["lag_1h"] = df_pred["consumo_kwh"].shift(1)
     df_pred["lag_24h"] = df_pred["consumo_kwh"].shift(24)
-    df_pred["rolling_3h"] = df_pred["consumo_kwh"].rolling(3).mean()
-    df_pred["rolling_24h"] = df_pred["consumo_kwh"].rolling(24).mean()
-    df_pred["delta"] = df_pred["consumo_kwh"].diff()
+    df_pred["rolling_3h"] = df_pred["consumo_kwh"].shift(1).rolling(3).mean()
+    df_pred["rolling_24h"] = df_pred["consumo_kwh"].shift(1).rolling(24).mean()
+    df_pred["delta"] = df_pred["consumo_kwh"].diff().shift(1)
+
     df_pred["hour_sin"] = np.sin(2 * np.pi * df_pred["hour"] / 24)
     df_pred["hour_cos"] = np.cos(2 * np.pi * df_pred["hour"] / 24)
 
