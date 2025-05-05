@@ -20,6 +20,9 @@ PREFECT_API_URL = env_dict['PREFECT_API_URL']
 # Docker Configuration
 DOCKER_DATA_DIR = env_dict['DOCKER_DATA_DIR']
 
+# Kubernetes PVC configuration
+KUBERNETES_PV_DIR = env_dict['KUBERNETES_PV_DIR']
+
 # DagsHub Data Paths
 REPO_DATA_DIR_PATH = env_dict['REPO_DATA_DIR_PATH']
 REPO_MODELS_DIR_PATH = env_dict['REPO_MODELS_DIR_PATH']
@@ -33,6 +36,7 @@ __all__ = [
     "PREFECT_API_KEY",
     "PREFECT_API_URL",
     "DOCKER_DATA_DIR",
+    "KUBERNETES_PV_DIR",
     "REPO_DATA_DIR_PATH",
     "REPO_MODELS_DIR_PATH"
 ]

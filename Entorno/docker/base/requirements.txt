@@ -9,8 +9,6 @@ pandas
 numpy
 matplotlib
 plotly
-dvc
-dvc[s3]
 
 # Machine Learning
 scikit-learn
