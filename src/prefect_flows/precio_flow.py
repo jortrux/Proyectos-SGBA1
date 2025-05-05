@@ -30,7 +30,7 @@ KUBERNETES_PV_DIR = os.getenv("KUBERNETES_PV_DIR")
 modelo_precio_path = f'{KUBERNETES_PV_DIR}/modelo_precio_reentrenado.pkl'
 folder_output = f'{KUBERNETES_PV_DIR}/datos_simulacion_precio'
 # file_path_precio = '../../data/processed/datos_precio/clima_precio_merged_recortado.parquet'
-file_path_precio = f'{DOCKER_DATA_DIR}/processed/datos_precio/clima_precio_merged_recortado.parquet'
+file_path_precio = f'{DOCKER_DATA_DIR}/processed/datos_precio/precio_consumo_electrico_timestamp_media.csv'
 
 
 @task
@@ -102,7 +102,7 @@ def cargar_dataset_precio():
         df (DataFrame): DataFrame con la columna 'timestamp' parseada como datetime.
     """
     # Cambia esta ruta al archivo CSV que contiene los datos de precios
-    return pd.read_parquet(file_path_precio)
+    return pd.read_csv(file_path_precio)
 
 
 @task
