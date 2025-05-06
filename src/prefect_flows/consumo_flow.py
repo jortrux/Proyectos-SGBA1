@@ -10,6 +10,7 @@ import mlflow.pyfunc
 import dagshub
 from prefect import task, flow, get_run_logger
 import argparse
+from pathlib import Path
 
 
 # Variables globales
@@ -21,7 +22,7 @@ KUBERNETES_PV_DIR = os.getenv("KUBERNETES_PV_DIR")
 
 modelo_consumo_path = f'{KUBERNETES_PV_DIR}/modelo_consumo_reentrenado.pkl'
 folder_output = f'{KUBERNETES_PV_DIR}/datos_simulacion_consumo'
-file_path_hogar = f'{DOCKER_DATA_DIR}/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv'
+# file_path_hogar = f'{DOCKER_DATA_DIR}/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv'
 
 FESTIVOS = [  # Festivos Barcelona
     "2017-01-06","2017-04-14","2017-04-17","2017-05-01","2017-06-05","2017-06-24",
@@ -47,9 +48,10 @@ regresores = [
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Reentrena y predice el consumo en un día determinado')
     parser.add_argument("--date", type=str, required=True, help="Fecha en formato YYYY-MM-DD")
+    parser.add_argument("--data", type=Path, required=True, help="Datos de entrenamiento en tipo .csv")
     args = parser.parse_args()
 
-    return pd.to_datetime(args.date)
+    return pd.to_datetime(args.date), args.data.resolve()
 
 
 @task(name="authenticate_dagshub", retries=2)
@@ -72,7 +74,7 @@ def initialize_dagshub():
 
 
 @task
-def inicializar_entorno_consumo(dia_actual):
+def inicializar_entorno_consumo(dia_actual, file_path_hogar):
     authenticate_dagshub()
     initialize_dagshub()
 
@@ -82,11 +84,11 @@ def inicializar_entorno_consumo(dia_actual):
     else:
         os.makedirs(folder_output)
 
-    reentrenar_modelo_consumo(dia_actual)
+    reentrenar_modelo_consumo(dia_actual, file_path_hogar)
 
 
 @task
-def cargar_dataset_consumo():
+def cargar_dataset_consumo(file_path_hogar):
     return pd.read_csv(file_path_hogar, parse_dates=["timestamp"])
 
 
@@ -120,8 +122,8 @@ def cargar_modelo_consumo():
 
 
 @task
-def predecir_consumo_por_dia(dia, modelo):
-    df = cargar_dataset_consumo()
+def predecir_consumo_por_dia(dia, modelo, file_path_hogar):
+    df = cargar_dataset_consumo(file_path_hogar)
     df = df.rename(columns={"timestamp": "ds", "consumo_kwh": "y"})
     fecha_inicio = pd.to_datetime(dia)
     df_historia = df[df["ds"] < fecha_inicio].copy()
@@ -173,8 +175,8 @@ def guardar_resultados_consumo(df_resultado, dia):
 
 
 @task
-def reentrenar_modelo_consumo(dia):
-    df = cargar_dataset_consumo()
+def reentrenar_modelo_consumo(dia, file_path_hogar):
+    df = cargar_dataset_consumo(file_path_hogar)
     df = df[df["timestamp"] < pd.to_datetime(dia)]
     df = preparar_features_prophet(df)
     
@@ -242,13 +244,13 @@ def flow_consumo():
     logger = get_run_logger()
 
     try:
-        dia_actual = parse_arguments()
+        dia_actual, file_path_hogar = parse_arguments()
 
-        inicializar_entorno_consumo(dia_actual)
+        inicializar_entorno_consumo(dia_actual, file_path_hogar)
         modelo = cargar_modelo_consumo()
 
         # 1. Predecir consumo
-        df_resultados = predecir_consumo_por_dia(dia_actual, modelo)
+        df_resultados = predecir_consumo_por_dia(dia_actual, modelo, file_path_hogar)
 
         # 2. Imprimir por hora
         for _, row in df_resultados.iterrows():
@@ -265,7 +267,7 @@ def flow_consumo():
         calcular_metricas_consumo(dia_actual)
 
         # 5. Reentrenar modelo con todos los datos hasta el día actual
-        modelo = reentrenar_modelo_consumo(dia_actual)
+        modelo = reentrenar_modelo_consumo(dia_actual, file_path_hogar)
 
         return 0
     

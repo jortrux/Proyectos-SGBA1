@@ -19,6 +19,7 @@ import joblib
 import os
 from prefect import task, flow, get_run_logger
 import argparse
+from pathlib import Path
 
 # Variables globales
 DAGSHUB_USERNAME = os.getenv("DAGSHUB_USERNAME")
@@ -30,16 +31,17 @@ KUBERNETES_PV_DIR = os.getenv("KUBERNETES_PV_DIR")
 modelo_precio_path = f'{KUBERNETES_PV_DIR}/modelo_precio_reentrenado.pkl'
 folder_output = f'{KUBERNETES_PV_DIR}/datos_simulacion_precio'
 # file_path_precio = '../../data/processed/datos_precio/clima_precio_merged_recortado.parquet'
-file_path_precio = f'{DOCKER_DATA_DIR}/processed/datos_precio/precio_consumo_electrico_timestamp_media.csv'
+# file_path_precio = f'{DOCKER_DATA_DIR}/processed/datos_precio/clima_precio_merged_recortado.parquet'
 
 
 @task
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Reentrena y predice el consumo en un día determinado')
     parser.add_argument("--date", type=str, required=True, help="Fecha en formato YYYY-MM-DD")
+    parser.add_argument("--data", type=Path, required=True, help="Datos de entrenamiento en tipo .parquet")
     args = parser.parse_args()
 
-    return pd.to_datetime(args.date)
+    return pd.to_datetime(args.date), args.data.resolve()
 
 
 @task(name="authenticate_dagshub", retries=2)
@@ -90,19 +92,19 @@ def inicializar_entorno_precio():
 
 
 @task
-def cargar_dataset_precio():
+def cargar_dataset_precio(file_path_precio: Path):
     """
     Descripción:
         Carga el dataset original de precios de la electricidad.
 
     Params:
-        Ninguno.
+        file_path_precio (Path): Ruta del dataset
 
     Output:
         df (DataFrame): DataFrame con la columna 'timestamp' parseada como datetime.
     """
     # Cambia esta ruta al archivo CSV que contiene los datos de precios
-    return pd.read_csv(file_path_precio)
+    return pd.read_parquet(file_path_precio)
 
 
 @task
@@ -219,13 +221,13 @@ def cargar_modelo_precio():
 
 
 @task
-def entrenar_modelo_simple_precio(dia_fin_train, dia_fin_test, block_size=48):
+def entrenar_modelo_simple_precio(dia_fin_train, dia_fin_test, file_path_precio, block_size=48):
     """
     Entrena un modelo XGBoost usando datos hasta `dia_fin_train`,
     y evalúa su rendimiento en bloques deslizantes de 48h hasta `dia_fin_test`.
     """
     # Cargar y preparar datos
-    df = cargar_dataset_precio()
+    df = cargar_dataset_precio(file_path_precio)
     df_train, df_test = preparar_features_precio(df, dia_fin_train, dia_fin_test)
 
     # --- Preparar datos de entrenamiento ---
@@ -282,14 +284,14 @@ def entrenar_modelo_simple_precio(dia_fin_train, dia_fin_test, block_size=48):
 
 
 @task
-def entrenar_modelo_precio_optuna(dia_fin_train, dia_fin_test, block_size=48, n_trials=50):
+def entrenar_modelo_precio_optuna(dia_fin_train, dia_fin_test, file_path_precio, block_size=48, n_trials=50):
     """
     Entrena un XGBRegressor optimizando hiperparámetros con Optuna,
     evalúa en bloques de `block_size` horas y devuelve el modelo final
     junto al scaler, el DataFrame de resultados por bloque y los mejores params.
     """
     # 1) Carga y prepara datos
-    df = cargar_dataset_precio()
+    df = cargar_dataset_precio(file_path_precio)
     df_train, df_test = preparar_features_precio(df, dia_fin_train, dia_fin_test)
 
     # 2) Prepara X/y de train
@@ -418,7 +420,7 @@ def log_full_experiment(model, scaler, resultados_df, best_params, run_name, reg
 
 
 @task
-def reentrenar_modelo_precio(dia_fin_train, base_run_name, block_size=48):
+def reentrenar_modelo_precio(dia_fin_train, base_run_name, file_path_precio, block_size=48):
     """
     Descripción:
         Reentrena el modelo de predicción usando los hiperparámetros de MLflow
@@ -467,7 +469,7 @@ def reentrenar_modelo_precio(dia_fin_train, base_run_name, block_size=48):
     best_params['random_state'] = 42
 
     # Cargar y preparar datos
-    df = cargar_dataset_precio()
+    df = cargar_dataset_precio(file_path_precio)
     # Filtrar solo hasta dia_fin_train (excluido)
     df_train = df[df['timestamp'] < pd.to_datetime(dia_fin_train)].copy()
 
@@ -495,7 +497,7 @@ def reentrenar_modelo_precio(dia_fin_train, base_run_name, block_size=48):
 
 
 @task
-def predecir_precio(dia, horas=48, model=None, scaler=None):
+def predecir_precio(dia, file_path_precio, horas=48, model=None, scaler=None):
     import pandas as pd
 
 
@@ -503,7 +505,7 @@ def predecir_precio(dia, horas=48, model=None, scaler=None):
         model, scaler = cargar_modelo_precio()
 
     # Cargar y preparar los datos
-    df = cargar_dataset_precio()
+    df = cargar_dataset_precio(file_path_precio)
     dia = pd.to_datetime(dia)
     dia_final = dia + pd.Timedelta(hours=horas-1)
     _, df_pred = preparar_features_precio(df, dia, dia_final)
@@ -541,7 +543,7 @@ def flow_precio():
 
     try:
         fecha_inicio_entrenamiento = pd.to_datetime("2019-06-01")
-        fecha_inicio_prediccion = parse_arguments()
+        fecha_inicio_prediccion, file_path_precio = parse_arguments()
         ventana_horas = 48  # Tamaño de la ventana para el modelo (48 horas)
         num_trials_optuna = 50  # Número de pruebas para Optuna
 
@@ -552,28 +554,19 @@ def flow_precio():
         inicializar_entorno_precio()
         print("Paso 1: Entorno inicializado.")
 
-        # Paso 2: Entrenar modelo desde cero con Optuna
-        model, scaler, resultados_metricas_df, best_params = entrenar_modelo_precio_optuna(
-            dia_fin_train=fecha_inicio_entrenamiento,
-            dia_fin_test=fecha_inicio_prediccion,
-            block_size=ventana_horas,
-            n_trials=num_trials_optuna,
-        )
-        print("Paso 2: Modelo entrenado con Optuna.")
+        # Paso 2: Predecir el precio de la luz
+        df_pred = predecir_precio(dia=fecha_inicio_prediccion, file_path_precio=file_path_precio, horas=horas_a_predecir)
+        df_pred = df_pred.sort_values(by='timestamp')
+        print("Paso 2: Predicción realizada.")
 
-        # Paso 3: Log de experimentos inicial
-        log_full_experiment(
-            model=model,
-            scaler=scaler,
-            resultados_df=resultados_metricas_df,
-            best_params=best_params,
-            run_name=f"simulacion_modelo_precio_optuna_{fecha_inicio_entrenamiento}---{fecha_inicio_prediccion}",
-        )
-        print("Paso 3: Experimento logueado.")
+        # Paso 3: Guardar predicciones
+        guardar_resultados_precio(df_pred, dia=fecha_inicio_prediccion, horas=horas_a_predecir)
+        print("Paso 3: Predicciones guardadas.")
 
         # Paso 4: Reentrenar el mejor modelo con nuevos datos
         model, scaler, best_params = reentrenar_modelo_precio(
             dia_fin_train=fecha_inicio_entrenamiento,
+            file_path_precio=file_path_precio,
             block_size=ventana_horas,
             base_run_name=f"{fecha_inicio_entrenamiento}---{fecha_inicio_prediccion}",
         )
@@ -584,18 +577,9 @@ def flow_precio():
             scaler=scaler,
             resultados_df=None,
             best_params=best_params,
-            run_name="reentrenamiento_modelo_precio",
+            run_name="reentrenamiento_modelo_precio"
         )
         print("Paso 4: Experimento de reentrenamiento logueado.")
-
-        # Paso 5: Predecir el precio de la luz
-        df_pred = predecir_precio(dia=fecha_inicio_prediccion, horas=horas_a_predecir)
-        df_pred = df_pred.sort_values(by='timestamp')
-        print("Paso 5: Predicción realizada.")
-
-        # Paso 6: Guardar predicciones
-        guardar_resultados_precio(df_pred, dia=fecha_inicio_prediccion, horas=horas_a_predecir)
-        print("Paso 6: Predicciones guardadas.")
 
         return 0
     

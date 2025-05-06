@@ -76,7 +76,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('--requirements', type=Path, default=project_root / 'requirements.txt',
                       help=f'Ruta al archivo requirements.txt (por defecto: PROJECT_ROOT/requirements.txt)')
     parser.add_argument('--data', type=Path, default=project_root / 'data',
-                      help=f'Ruta al directorio de datos (por defecto: PROJECT_ROOT/data)')
+                      help=f'Ruta al directorio/archivo de datos (por defecto: PROJECT_ROOT/data)')
     parser.add_argument('--timeout', type=int, default=3600, 
                       help='Tiempo máximo de espera para la ejecución (segundos)')
     parser.add_argument('--image-name', type=str, default='prefect-flow', 
@@ -202,9 +202,9 @@ def check_prerequisites() -> None:
 def setup_dockerfile_dir(
     flow_script_path: Path, 
     requirements_path: Path, 
-    data_path: Path, 
     base_image_name: str, 
     parent_dockerfile_dir: Path,
+    data_path: Optional[Path] = None,
     additional_args: Optional[List[str]] = None
 ) -> Tuple[str, Path]:
     """
@@ -213,9 +213,9 @@ def setup_dockerfile_dir(
     Args:
         flow_script_path: Ruta al script de flujo.
         requirements_path: Ruta al archivo de requisitos.
-        data_path: Ruta al directorio de datos.
         base_image_name: Nombre de la imagen base.
         parent_dockerfile_dir: Directorio donde crear el directorio con el Dockerfile y sus dependencias.
+        data_path: Ruta, opcional, al directorio/archivo de datos.
         additional_args: Lista opcional de argumentos que se pasarán al script de flujo.
     
     Returns:
@@ -243,15 +243,25 @@ def setup_dockerfile_dir(
     shutil.copy2(requirements_path, requirements_dest)
     logger.debug(f"Copiado: {requirements_path} -> {requirements_dest}")
     
-    # Verificar y copiar el directorio de datos
-    if not data_path.exists():
-        raise FileNotFoundError(f"El directorio de datos {data_path} no existe")
+    copy_data_str = ""
     
-    data_dest = dockerfile_dir / 'data'
-    if data_dest.exists():
-        shutil.rmtree(data_dest)
-    shutil.copytree(data_path, data_dest)
-    logger.debug(f"Copiado directorio: {data_path} -> {data_dest}")
+    if data_path:
+        # Verificar y copiar el directorio/archivo de datos
+        if not data_path.exists():
+            raise FileNotFoundError(f"El directorio/archivo de datos {data_path} no existe")
+        
+        data_dest = dockerfile_dir / 'data'
+        if data_dest.exists():
+            shutil.rmtree(data_dest)
+        
+        if data_path.is_dir():
+            shutil.copytree(data_path, data_dest)
+        else:
+            data_dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(data_path, data_dest / data_path.name)
+    
+        logger.debug(f"Copiado directorio/archivo: {data_path} -> {data_dest}")
+        copy_data_str = f"COPY data/ {DOCKER_DATA_DIR}"
     
     # Verificar y copiar el script de flujo
     if not flow_script_path.exists():
@@ -278,7 +288,7 @@ def setup_dockerfile_dir(
         RUN pip install --no-cache-dir -r requirements.txt
 
         # Copiar los datos
-        COPY data/ {DOCKER_DATA_DIR}
+        {copy_data_str}
 
         # Copiar el script del flujo
         COPY flow_script.py .
@@ -801,9 +811,9 @@ def main() -> int:
         flow_name, dockerfile_dir = setup_dockerfile_dir(
             flow_script_path=args.flow_script.resolve(), 
             requirements_path=args.requirements.resolve(),
-            data_path=args.data.resolve(),
             base_image_name=args.base_image,
-            parent_dockerfile_dir=parent_dockerfile_dir
+            parent_dockerfile_dir=parent_dockerfile_dir,
+            data_path=args.data.resolve()
         )
         
         # Construir imagen Docker
