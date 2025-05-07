@@ -34,7 +34,7 @@ try:
 
     # Importar funciones y variables de entrono de otros scripts
     from config import *
-    from Entorno.deploy_prefect_k8s_2 import check_prerequisites, setup_dockerfile_dir, build_docker_image, apply_configmap, apply_secret, apply_pv_pvc, deploy_to_kubernetes
+    from Entorno.deploy_prefect_k8s_2 import check_prerequisites, setup_dockerfile_dir, build_docker_image, apply_configmap, apply_secret, apply_pv_pvc, deploy_to_kubernetes, run_command
 except ImportError:
     global_logger.error("Errores al intentar hacer las distintas importaciones. Verificar la estructura del proyecto.")
     sys.exit(1)
@@ -87,6 +87,40 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 
+@task
+def get_results(pv_name: str, pvc_name: str, namespace: str = "default") -> None:
+
+    logger = get_run_logger()
+
+    # Crear carpeta donde guardar resultados
+    results_path = Path(__file__).resolve().parent / "simulation_results"
+    if results_path.exists():
+        shutil.rmtree(results_path)
+    results_path.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Carpeta de resultados creada en {results_path}")
+
+    # Guardar datos de la simulación en directorio temporal
+    run_command(["minikube", "ssh", "--", "sudo", "mkdir", "-p", "/tmp/data"], logger=logger)
+    run_command(["minikube", "ssh", "--", "sudo", "cp", "-r", f"{KUBERNETES_PV_DIR}*", "/tmp/data"], logger=logger)
+    
+    # Guardar los datos de minikube en local
+    run_command(["minikube", "ssh", "--", "sudo", "tar", "-czf", "/tmp/data.tar.gz", "-C", "/tmp", "data"], logger=logger)
+    run_command(["minikube", "cp", "minikube:/tmp/data.tar.gz", f"{str(results_path)}/data.tar.gz"], logger=logger)
+    run_command(["tar", "-xzf", f"{str(results_path)}/data.tar.gz", "-C", str(results_path)], logger=logger)
+
+    logger.info(f"Resultados guardados en {results_path}")
+
+    # Borrar carpeta temporal
+    run_command(["minikube", "ssh", "--", "sudo", "rm", "-rf", "/tmp/data"], logger=logger)
+
+    # Eliminar PV y PVC
+    run_command(["minikube", "ssh", "--", "sudo", "rm", "-rf", KUBERNETES_PV_DIR], logger=logger)
+    run_command(["kubectl", "delete", "pvc", pvc_name, "-n", namespace], logger=logger)
+    run_command(["kubectl", "delete", "pv", pv_name], logger=logger)
+
+    logger.info(f"PV ({pv_name}) y PVC ({pvc_name}) eliminados")
+
+
 @flow
 def main_flow():
 
@@ -99,7 +133,7 @@ def main_flow():
         # Configurar simulación
         dia_actual = pd.to_datetime("2020-01-01")
         #dia_final = pd.to_datetime("2020-02-01")
-        dia_final = pd.to_datetime("2020-01-07")
+        dia_final = pd.to_datetime("2020-01-02")
 
         args = parse_arguments()
 
@@ -192,6 +226,8 @@ def main_flow():
             )
 
             dia_actual += timedelta(days=1)
+        
+        get_results(pv_name, pvc_name, namespace=args.namespace)
 
         return 0
     
