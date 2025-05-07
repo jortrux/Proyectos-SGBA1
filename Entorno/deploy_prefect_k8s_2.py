@@ -294,7 +294,7 @@ def setup_dockerfile_dir(
         COPY flow_script.py .
 
         # Ejecutar el flujo cuando se inicie el contenedor
-        CMD ["python", "flow_script.py", {', '.join([f'"{arg}"' for arg in args_str])}]
+        CMD ["python", "flow_script.py"{f', {', '.join([f'"{arg}"' for arg in args_str])}' if args_str else ""}]
         """
     )
     
@@ -537,7 +537,7 @@ def apply_pv_pvc(kubernetes_dir: Path, namespace: str = "default") -> Tuple[str,
             accessModes:
                 - ReadWriteOnce
             storageClassName: manual
-            persistentVolumeReclaimPolicy: Retain
+            persistentVolumeReclaimPolicy: Delete
             hostPath:
                 path: {KUBERNETES_PV_DIR}
 

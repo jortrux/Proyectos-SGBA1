@@ -167,8 +167,8 @@ class ActorCritic(nn.Module):
 @task
 def get_predictions_consumo_precio() -> Tuple[pd.DataFrame, pd.DataFrame]:
     # Se obtienen los datos de precio y consumo obtenidos de los otros 2 modelos
-    df_precio = pd.read_csv("{KUBERNETES_PV_DIR}/datos_simulacion_precio/prediccion_precio.csv")
-    df_consumo = pd.read_csv("{KUBERNETES_PV_DIR}/datos_simulacion_consumo/predicciones_consumo.csv")
+    df_precio = pd.read_csv(f"{KUBERNETES_PV_DIR}datos_simulacion_precio/prediccion_precio.csv")
+    df_consumo = pd.read_csv(f"{KUBERNETES_PV_DIR}datos_simulacion_consumo/predicciones_consumo.csv")
 
     df_merged = pd.merge(df_precio, df_consumo, left_on="timestamp", right_on="fecha", how="inner")
 
@@ -176,7 +176,7 @@ def get_predictions_consumo_precio() -> Tuple[pd.DataFrame, pd.DataFrame]:
     df_real = df_real.rename(columns={"real_consumo": CONSUMPTION_COL, "€/kwh": PRICE_COL})
 
     df_predicted = df_merged[["timestamp", "pred_consumo", "prediccion_€/kwh"]]
-    df_predicted = df_predicted.rename(columns={"pred_consumo": CONSUMPTION_COL, "prediccion_€/kwh": PRICE_COL})
+    df_predicted = df_predicted.rename(columns={"pred_consumo": "price_future", "prediccion_€/kwh": "consumo_futuro"})
 
     return df_real, df_predicted
 

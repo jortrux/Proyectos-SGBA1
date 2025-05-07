@@ -66,7 +66,7 @@ def parse_arguments() -> argparse.Namespace:
                       help=f'Ruta al archivo requirements.txt (por defecto: PROJECT_ROOT/requirements.txt)')
     parser.add_argument('--data-precio', type=Path, default=project_root / 'data/processed/datos_precio/clima_precio_merged_recortado.parquet',
                       help=f'Ruta a los datos de entrenamiento de precio (por defecto: PROJECT_ROOT/data/processed/datos_precio/clima_precio_merged_recortado.parquet)')
-    parser.add_argument('--data-consumo', type=Path, default=project_root / '/data/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv',
+    parser.add_argument('--data-consumo', type=Path, default=project_root / 'data/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv',
                       help=f'Ruta a los datos de entrenamiento de consumo (por defecto: PROJECT_ROOT/data/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv)')
     parser.add_argument('--timeout', type=int, default=3600, 
                       help='Tiempo máximo de espera para la ejecución (segundos)')
@@ -98,7 +98,8 @@ def main_flow():
 
         # Configurar simulación
         dia_actual = pd.to_datetime("2020-01-01")
-        dia_final = pd.to_datetime("2020-02-01")
+        #dia_final = pd.to_datetime("2020-02-01")
+        dia_final = pd.to_datetime("2020-01-07")
 
         args = parse_arguments()
 
@@ -113,7 +114,7 @@ def main_flow():
             data_path=args.data_precio.resolve(),
             base_image_name=args.base_image,
             parent_dockerfile_dir=parent_dockerfile_dir,
-            additional_args=["--date", dia_actual, "--data", f"{DOCKER_DATA_DIR}/{args.data_precio.resolve().name}"]
+            additional_args=["--date", dia_actual.isoformat(), "--data", f"{DOCKER_DATA_DIR}{args.data_precio.resolve().name}"]
         )
         precio_image_name = build_docker_image(precio_dockerfile_dir, "precio")
 
@@ -123,7 +124,7 @@ def main_flow():
             data_path=args.data_consumo.resolve(),
             base_image_name=args.base_image,
             parent_dockerfile_dir=parent_dockerfile_dir,
-            additional_args=["--date", dia_actual, "--data", f"{DOCKER_DATA_DIR}/{args.data_consumo.resolve().name}"]
+            additional_args=["--date", dia_actual.isoformat(), "--data", f"{DOCKER_DATA_DIR}{args.data_consumo.resolve().name}"]
         )
         consumo_image_name = build_docker_image(consumo_dockerfile_dir, "consumo")
 

@@ -28,10 +28,10 @@ DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
 DOCKER_DATA_DIR = os.getenv("DOCKER_DATA_DIR")
 KUBERNETES_PV_DIR = os.getenv("KUBERNETES_PV_DIR")
 
-modelo_precio_path = f'{KUBERNETES_PV_DIR}/modelo_precio_reentrenado.pkl'
-folder_output = f'{KUBERNETES_PV_DIR}/datos_simulacion_precio'
+modelo_precio_path = f'{KUBERNETES_PV_DIR}modelo_precio_reentrenado.pkl'
+folder_output = f'{KUBERNETES_PV_DIR}datos_simulacion_precio'
 # file_path_precio = '../../data/processed/datos_precio/clima_precio_merged_recortado.parquet'
-# file_path_precio = f'{DOCKER_DATA_DIR}/processed/datos_precio/clima_precio_merged_recortado.parquet'
+# file_path_precio = f'{DOCKER_DATA_DIR}processed/datos_precio/clima_precio_merged_recortado.parquet'
 
 
 @task

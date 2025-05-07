@@ -20,8 +20,8 @@ DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
 DOCKER_DATA_DIR = os.getenv("DOCKER_DATA_DIR")
 KUBERNETES_PV_DIR = os.getenv("KUBERNETES_PV_DIR")
 
-modelo_consumo_path = f'{KUBERNETES_PV_DIR}/modelo_consumo_reentrenado.pkl'
-folder_output = f'{KUBERNETES_PV_DIR}/datos_simulacion_consumo'
+modelo_consumo_path = f'{KUBERNETES_PV_DIR}modelo_consumo_reentrenado.pkl'
+folder_output = f'{KUBERNETES_PV_DIR}datos_simulacion_consumo'
 # file_path_hogar = f'{DOCKER_DATA_DIR}/processed/datos_consumo/hogar_individual_bcn/casa_bcn_clean.csv'
 
 FESTIVOS = [  # Festivos Barcelona

@@ -9,6 +9,6 @@ data:
   DAGSHUB_USERNAME: auditoria.SGBA1
   DAGSHUB_REPO_NAME: Proyectos-SGBA1
   DOCKER_DATA_DIR: /opt/prefect/data/
-  KUBERNETES_PV_DIR: /mnt/data
+  KUBERNETES_PV_DIR: /mnt/data/
   REPO_DATA_DIR_PATH: ./
   REPO_MODELS_DIR_PATH: ./
